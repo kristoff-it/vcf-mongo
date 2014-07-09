@@ -17,7 +17,7 @@ java_import "org.broadinstitute.variant.vcf.VCFFileReader"
 
 options = {
 	:address            => 'localhost',
-	:port               => 2213,
+	:port               => 27017,
 	:db                 => 'VCF',
 	:append             => false,
 	:no_progress        => false,
@@ -40,7 +40,7 @@ OptionParser.new do |opts|
     options[:address] = host
   end
   opts.on("--port PORT", Integer,  
-  	"Port number where the RethinkDB instance is listening. Defaults to `?????`.") do |port|
+  	"Port number where the MongoDB instance is listening. Defaults to `?????`.") do |port|
     options[:port] = port
   end
   opts.on("--db DATABASE",  
@@ -122,18 +122,19 @@ end
 
 # Processing pipeline:
 #
-# p1 p2 p3     # parser threads
+# p1 p2 pN     # parser threads
 #  |  |  | 
-# b1 b2 b3     # parser buffers
+# b1 b2 bN     # parser buffers
 #   \ | /
 #  ALIGNER     # aligner thread
 #     |
 #     mb       # merger buffer 
 #     | 
-#    /|\
+#   / | \
 #  m1 m2 m3    # merger threads
+#   \ | /
 #     |
-#    dbb       # MongoDB buffer
+#    mdbb      # MongoDB buffer
 #     |
 #    / \
 #  mdb1 mdb2   # MongoDB import threads 
@@ -148,10 +149,10 @@ end
 
 # Check database status:
 if options[:db] == 'VCF'
-	puts "# Defaulting to `VCF` database."
-	coll = MongoClient.new.db('VCF').collection(collection)
+  puts "# Defaulting to `VCF` database."
 end
-
+# coll = MongoClient.new.db('VCF').collection(collection)
+# is_db_ok, was_initialized = check_db(MongoClient.new(options[:address], options[:port]).db(options[:db]), true)
 
 # Instantiate queues:
 parser_buffers = parsers.length.times.map {SizedQueue.new(options[:parser_buffer_size])}
@@ -191,7 +192,7 @@ end
 mongo_threads = []
 options[:mongo_threads].times do 
 	mongo_threads << Thread.new do
-		coll = MongoClient.new.db('VCF').collection(collection)
+		coll = MongoClient.new(options[:address], options[:port]).db('VCF').collection(collection)
 		beginning = Time.now
 		count = 0
 		bulk = coll.initialize_ordered_bulk_op

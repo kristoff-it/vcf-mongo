@@ -67,8 +67,6 @@ class VCFRecordAligner < Enumerator
 			end
 			yield selected_records_ids.zip(selected_records)
 		end
-		# @output_buffer << :done
-
 	end
 end
 
@@ -109,5 +107,12 @@ def load_parsers(vcf_filenames)
 	headers = parsers.map {|p| p.getFileHeader}
 	samples = headers.map {|h| h.getSampleNamesInOrder}
 	return files, parsers, headers, samples
+end
+
+def check_db(db)
+	collections = db.collection_names
+	if collections.length = 0
+		return :empty
+	end
 end
 
