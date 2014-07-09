@@ -33,6 +33,11 @@ options = {
 
 OptionParser.new do |opts|
   opts.banner = "Load VCF files into a collection.\n Usage: vcf-import.rb [options] collection file1.vcf file2.vcf ..."
+  #debug
+  opts.on("--queues",  
+    "Show queues") do |queues|
+    options[:queues] = queues
+  end
 
   # MongoDB connection options
   opts.on("--address HOSTNAME",  
@@ -216,7 +221,7 @@ options[:mongo_threads].times do
 end
 
 
-queues = true
+queues = options[:queues]
 while queues and mongo_threads.any? {|t| t.alive?}
 	print "\rP: #{parser_buffers[0].length} M: #{merger_buffer.length} DB: #{mongo_buffer.length} -- "
 	$stdout.flush
