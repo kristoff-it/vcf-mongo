@@ -156,8 +156,40 @@ end
 if options[:db] == 'VCF'
   puts "# Defaulting to `VCF` database."
 end
-# coll = MongoClient.new.db('VCF').collection(collection)
-# is_db_ok, was_initialized = check_db(MongoClient.new(options[:address], options[:port]).db(options[:db]), true)
+
+dbconn = MongoClient.new(options[:address], options[:port]).db(options[:db])
+dbstatus = check_db(dbconn)
+case dbstatus
+when :bad
+  abort("Database `#{options[:db]}` doesn't seem to belong to this application.")
+when :empty
+  puts "# Empty database, performing initialization."
+  init_db(dbconn)  
+end
+
+# Check collection status:
+collectionstatus = check_collection(dbconn, collection)
+
+case collectionstatus
+when :new
+  if options[:append]
+    puts '# Collection does not exist, switching to direct import mode.'
+  end
+  options[:append] = false
+when :consistent
+  if not options[:append]
+    abort("The collection already exists but you didn't specify the `--append` flag.")
+  end
+else
+  abort('The collection is in an inconsistent state. Use vcf-admin to check (and fix) it.')
+end
+
+# Insert or update metadata inside the DB:
+if options[:append]
+  update_metadata(dbconn, collection, files, headers, samples)
+else
+  init_metadata(dbconn, collection, files, headers, samples)
+end
 
 # Instantiate queues:
 parser_buffers = parsers.length.times.map {SizedQueue.new(options[:parser_buffer_size])}
@@ -182,7 +214,7 @@ aligner_thread = Thread.new do
 	options[:merger_threads].times {merger_buffer << :done}
 end
 
-# Lanch merger threads:
+# Launch merger threads:
 merger_threads = []
 options[:merger_threads].times do |index|
 	merger_threads << Thread.new do
@@ -197,10 +229,9 @@ end
 mongo_threads = []
 options[:mongo_threads].times do 
 	mongo_threads << Thread.new do
-		coll = MongoClient.new(options[:address], options[:port]).db('VCF').collection(collection)
 		beginning = Time.now
 		count = 0
-		bulk = coll.initialize_ordered_bulk_op
+		bulk = dbconn.collection(collection).initialize_ordered_bulk_op
 		start = Time.now
 		while (elem = mongo_buffer.pop) != :done
 		  	bulk.insert(elem)
@@ -220,16 +251,17 @@ options[:mongo_threads].times do
 	end 
 end
 
-
+# Wait for operations to end:
 queues = options[:queues]
 while queues and mongo_threads.any? {|t| t.alive?}
 	print "\rP: #{parser_buffers[0].length} M: #{merger_buffer.length} DB: #{mongo_buffer.length} -- "
 	$stdout.flush
 end
+
 mongo_threads[0].join
 
+# Check if all mongo threads are ok and mark the operation as done in that case:
+flag_as_consistent(dbconn, collection)
+
+# Bye
 puts 'Done.'
-
-
-
-# puts options
