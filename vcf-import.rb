@@ -1,18 +1,20 @@
 require 'set'
 require 'optparse'
 
-require 'vcfdb-core.rb'
-
-
+# Picard parser:
 require 'sam-1.113.jar'
 require 'tribble-1.113.jar'
 require 'variant-1.113.jar'
-require 'mongo'
-require 'pp'
 
+# Import the parser's java class:
+java_import "org.broadinstitute.variant.vcf.VCFFileReader"
+
+# MongoDB:
+require 'mongo'
 include Mongo
 
-java_import "org.broadinstitute.variant.vcf.VCFFileReader"
+# Utils:
+require 'vcfdb-core.rb'
 
 
 options = {
@@ -76,7 +78,7 @@ OptionParser.new do |opts|
     options[:mongo_chunk_size] = chunk
   end
   opts.on("--merger-threads THREADNUM", Integer, 
-  	"Number of threads that operate the merging operations. Defaults to 2.") do |merger|
+  	"Number of threads that perform the merging operations. Defaults to 2.") do |merger|
   	if merger < 1
   		abort("merger-threads must be a value >= 1.")
   	end
@@ -127,7 +129,7 @@ end
 
 # Processing pipeline:
 #
-# p1 p2 pN     # parser threads
+# P1 P2 PN     # parser threads
 #  |  |  | 
 # b1 b2 bN     # parser buffers
 #   \ | /
@@ -136,13 +138,13 @@ end
 #     mb       # merger buffer 
 #     | 
 #   / | \
-#  m1 m2 m3    # merger threads
+#  M1 M2 MN    # merger threads
 #   \ | /
 #     |
 #    mdbb      # MongoDB buffer
 #     |
 #    / \
-#  mdb1 mdb2   # MongoDB import threads 
+#  MDB1 MDBN   # MongoDB import threads 
 
 # Load parsers:
 files, parsers, headers, samples = load_parsers(vcf_filenames)
@@ -186,9 +188,9 @@ end
 
 # Insert or update metadata inside the DB:
 if options[:append]
-  update_metadata(dbconn, collection, files, headers, samples)
+  oldcount = update_metadata(dbconn, collection, vcf_filenames, headers, samples)
 else
-  init_metadata(dbconn, collection, files, headers, samples)
+  oldcount = init_metadata(dbconn, collection, vcf_filenames, headers, samples)
 end
 
 # Instantiate queues:
@@ -202,8 +204,8 @@ parsers.length.times do |index|
 	parser_threads << Thread.new do
 		parsers[index].each do |record|
 			parser_buffers[index] << record
-			# puts parser_buffers.length
 		end
+    # The aligner thread uses the :done element to check for end of queue:
 		parser_buffers[index] << :done
 	end
 end
@@ -211,6 +213,7 @@ end
 # Launch aligner thread:
 aligner_thread = Thread.new do
 	VCFRecordAligner.new(parser_buffers).each {|r| merger_buffer << r}	
+  # Must add a :done for each merger thread:
 	options[:merger_threads].times {merger_buffer << :done}
 end
 
@@ -219,13 +222,16 @@ merger_threads = []
 options[:merger_threads].times do |index|
 	merger_threads << Thread.new do
 		while (elem = merger_buffer.pop) != :done
-			mongo_buffer << merge_records(elem)
+			mongo_buffer << merge_records(elem, samples)
 		end
+    # Each upload thread must see a :done for each merger thread:
 		options[:mongo_threads].times { mongo_buffer << :done}
 	end
 end
 
 # Launch mongo threads:
+mongo_threads_done = Counter.new # threadsafe counter
+# (the counter exists to prevent the case where all threads die and we don't mark it as a failure)
 mongo_threads = []
 options[:mongo_threads].times do 
 	mongo_threads << Thread.new do
@@ -233,7 +239,14 @@ options[:mongo_threads].times do
 		count = 0
 		bulk = dbconn.collection(collection).initialize_ordered_bulk_op
 		start = Time.now
-		while (elem = mongo_buffer.pop) != :done
+    done_symbols_found = 0
+		while done_symbols_found < options[:merger_threads]
+        elem = mongo_buffer.pop
+        if elem == :done
+          done_symbols_found += 1
+          next
+        end
+
 		  	bulk.insert(elem)
 		  	count += 1
 		  	if count == options[:mongo_chunk_size]
@@ -247,21 +260,36 @@ options[:mongo_threads].times do
 		  	bulk.execute
 		end
 		ending = Time.now
-		puts "collection count: #{coll.count} in #{ending - beginning} seconds"
+		# puts "collection count: #{coll.count} in #{ending - beginning} seconds"
+    mongo_threads_done.increment!
 	end 
 end
 
-# Wait for operations to end:
-queues = options[:queues]
-while queues and mongo_threads.any? {|t| t.alive?}
-	print "\rP: #{parser_buffers[0].length} M: #{merger_buffer.length} DB: #{mongo_buffer.length} -- "
-	$stdout.flush
+
+# Wait for all threads to exit:
+if options[:queues]
+  puts "Displaying queues saturation status:"
+  puts "(the order is: parsed-records queue, aligned-records queue, merged-records queue)"
+  while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
+	  print "\rP: #{parser_buffers[0].length} M: #{merger_buffer.length} DB: #{mongo_buffer.length} -- "
+	  $stdout.flush
+  end
+else
+  mongo_threads.each {|t| t.join}
 end
 
-mongo_threads[0].join
+# Check if all mongo threads are ok and finalize the import operation:
+if mongo_threads_done.total == options[:mongo_threads]
+  if options[:append]
+    update_untouched_records(dbconn, oldcounts, samples)
+  end
+  flag_as_consistent(dbconn, collection)
+  puts "Import operations ended correctly."
+else
+  puts "Threads exited without aknowledging a complete operation." 
+  puts "The collection has been left in an inconsistent state."
+  puts "Use vcf-admin to check (and fix) the collection state."
+end
 
-# Check if all mongo threads are ok and mark the operation as done in that case:
-flag_as_consistent(dbconn, collection)
-
-# Bye
+# Bye!
 puts 'Done.'

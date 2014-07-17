@@ -9,7 +9,9 @@ include Mongo
 
 java_import "org.broadinstitute.variant.vcf.VCFFileReader"
 
-
+# The VCFRecordAligner performs (as one might imagine)
+# the alingment of multiple VCF files in order to be able
+# to perform merging operations concurrently.
 class VCFRecordAligner < Enumerator
 	def initialize (input_buffers) 
 		@input_buffers = input_buffers
@@ -24,7 +26,7 @@ class VCFRecordAligner < Enumerator
 		return 1
 	end
 
-	def each(&block)
+	def each(&block) #TODO: remove yield logic to have less thread trashing 
 		record_buffer = @input_buffers.map {|b| b.pop}
 		exhausted_parsers = record_buffer.count(:done)
 		total_parsers = record_buffer.length
@@ -71,43 +73,54 @@ class VCFRecordAligner < Enumerator
 end
 
 
-def merge_records(tuples)
+def merge_records(tuples, samples)
 	merged_record = {
-		'_id' => tuples[0][1].getChr + ':' + tuples[0][1].getStart.to_s,
-		'CHROM' => tuples[0][1].getChr,
-		'POS' => tuples[0][1].getStart,
-		'IDs' => {},
-		'REF' => tuples[0][1].getReference.getBaseString,
-		'QUALs' => {},
-		'FILTERs' => {},
-		'INFOs' => {},
-		'samples' => {},
-		'snp' => tuples[0][1].isSNP
+		'_id'     => tuples[0][1].getChr + ':' + tuples[0][1].getStart.to_s,
+		'CHROM'   => tuples[0][1].getChr,
+		'POS'     => tuples[0][1].getStart,
+		'IDs'     => [],
+		'REF'     => tuples[0][1].getReference.getBaseString,
+		'QUALs'   => [],
+		'FILTERs' => [],
+		'INFOs'   => [],
+		'samples' => [],
+		'snp'     => tuples[0][1].isSNP
 	}
-
+	array_index = 0
 	tuples.each do |id, record|
-		merged_record['IDs'][id.to_s] = record.getID.to_s
-		merged_record['QUALs'][id.to_s] = record.getPhredScaledQual.to_f
-		merged_record['FILTERs'][id.to_s] = record.getFiltersMaybeNull.map {|f| f} #lel
+		while id > array_index
+			merged_record['IDs']     << nil
+			merged_record['QUALs']   << nil
+			merged_record['FILTERs'] << nil
+			merged_record['INFOs']   << {}
+			merged_record['samples'].concat([{}] * samples[array_index].length)
+			array_index += 1
+		end
+		merged_record['IDs']     << record.getID.to_s
+		merged_record['QUALs']   << record.getPhredScaledQual.to_f
+		merged_record['FILTERs'] << record.getFiltersMaybeNull.map {|f| f} #lel
 
 		infos = {}
 		record.getAttributes.map {|name, attribute| infos[name] = attribute}
-		merged_record['INFOs'][id.to_s] = infos
-
-		record.getGenotypes.each {|gt| merged_record['samples'][gt.getSampleName] = gt.getAlleles.map{|a| a.getDisplayString}}
+		merged_record['INFOs']   << infos
+		#TODO: get all fields
+		record.getGenotypes.each {|gt| merged_record['samples'] << {'gt' => gt.getAlleles.map{|a| a.getDisplayString}}}
 	end
 
 	# puts merged_record
 	return merged_record
 end
 
+def update_untouched_records(dbconn, oldcounts, samples)
+    # dbconn.collection(collection).update({'samples' => {'$size' => number_of_previous_samples}}, {'$set' => {'$pushAll'}})
+end
+
 def load_parsers(vcf_filenames)
-	files = vcf_filenames.map {|f| java.io.File.new(f)} # where is my tell()??? :(
-	dotless_filenames = vcf_filenames.map {|f| f.gsub("\.", "<dot>")}
+	files = vcf_filenames.map {|f| java.io.File.new(f)}
 	parsers = files.map {|f| VCFFileReader.new(f, false)}
 	headers = parsers.map {|p| p.getFileHeader.getMetaDataInInputOrder.map {|m| m.toString}}
 	samples = parsers.map {|p| p.getFileHeader.getSampleNameToOffset.sort.map {|k,v| k}}
-	return dotless_filenames, parsers, headers, samples
+	return files, parsers, headers, samples
 end
 
 def check_db(db)
@@ -157,37 +170,53 @@ def check_collection(db, coll_name)
 end
 
 def init_metadata(db, coll_name, files, headers, samples)
-	samples_field = {}
-	samples.zip(files).each {|sl, f| sl.each {|s| samples_field[s] = f}}
-	headers_field = {}
-	files.zip(headers).each {|f, h| headers_field[f] = h }
+	samples_field = []
+	samples.each_with_index {|sublist, i| sublist.each {|s| samples_field << {'name' => s, 'vcfid' => i}}}
+
 	meta = {
-		'_id' => coll_name,
-		'created' => Time.now,
-		'vcfs' => headers_field,
-		'samples' => samples_field,
-		'consistent' => false,
+		'_id'                       => coll_name,
+		'created'                   => Time.now,
+		'vcfs'                      => files,
+		'headers'                   => headers,
+		'samples'                   => samples_field,
+		'consistent'                => false,
 		'last_inconsistency_reason' => ['INIT']
 	}
 	db.collection('__METADATA__').insert(meta)
+	return {:old_vcfs => 0, :old_samples => 0}
 end
 
 def update_metadata(db, coll_name, files, headers, samples)
 	#TODO: add race conditions checks
 	dbmeta = db.collection('__METADATA__').find_one('_id' => coll_name)
-	samples_field = dbmeta['samples']
-	samples.zip(files).each {|sl, f| sl.each {|s| samples_field[s] = f}}
-	headers_field = dbmeta['vcfs']
-	files.zip(headers).each {|f, h| headers_field[f] = h }
+	samples_field = []
+	samples.each_with_index {|sublist, i| sublist.each {|s| samples_field << {'name' => s, 'vcfid' => dbmeta['vcfs'].length + i}}}
 	meta = {
-		'vcfs' => headers_field,
-		'samples' => samples_field,
-		'consistent' => false,
+		'vcfs'                      => dbmeta['vcfs'] + files,
+		'headers'                   => dbmeta['headers'] + headers,
+		'samples'                   => dbmeta['samples'] + samples_field,
+		'consistent'                => false,
 		'last_inconsistency_reason' => ['APPEND', files]
 	}
 	db.collection('__METADATA__').update({'_id' => coll_name}, {'$set' => meta})
+	return {:old_vcfs => dbmeta[vcfs].length, :old_samples => dbmeta['samples'].length}
 end
 
 def flag_as_consistent(db, coll_name)
 	db.collection('__METADATA__').update({'_id' => coll_name}, {"$set" => {"consistent" => true}})
+end
+
+
+
+class Counter
+  attr_reader :total
+
+  def initialize
+    @total = 0
+    @mutex = Mutex.new
+  end
+
+  def increment!
+    @mutex.synchronize { @total += 1 }
+  end
 end
