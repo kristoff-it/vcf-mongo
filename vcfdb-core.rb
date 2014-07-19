@@ -118,7 +118,7 @@ def merge_records(tuples, samples)
 				sample['GQ'] = call.getGQ
 			end
 			if call.hasPL
-				sample['PL'] = call.getPL
+				sample['PL'] = call.getPL.map{|e| e}
 			end
 			# Extra fields:
 			call.getExtendedAttributes.each {|k, v| sample[k] = v}
