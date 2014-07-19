@@ -252,7 +252,14 @@ def mongo_direct_import(collection, queue, options)
 		bulk.insert(elem)
 		count += 1
 		if count == options[:mongo_chunk_size]
-		  	bulk.execute
+		  	begin
+		  		bulk.execute
+		  	rescue
+		  		puts 'Error in mongo bulk operation:'
+		  		puts elem
+			  p ex
+  			  pp ex.result
+		  	end
 		  	count = 0
 		  	end
 	end
