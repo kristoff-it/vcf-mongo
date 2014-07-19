@@ -231,7 +231,7 @@ def update_metadata(db, coll_name, files, headers, samples)
 		'last_inconsistency_reason' => ['APPEND', files]
 	}
 	db.collection('__METADATA__').update({'_id' => coll_name}, {'$set' => meta})
-	return {:old_vcfs => dbmeta[vcfs].length, :old_samples => dbmeta['samples'].length}
+	return {:old_vcfs => dbmeta['vcfs'].length, :old_samples => dbmeta['samples'].length}
 end
 
 def flag_as_consistent(db, coll_name)
