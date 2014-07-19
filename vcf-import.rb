@@ -225,8 +225,7 @@ options[:merger_threads].times do |index|
       begin
 			  mongo_buffer << merge_records(elem, samples)
       rescue => e
-        puts "Error in merger thread for line #{elem[0][1].getChr + ':' + elem[0][1].getStart.to_s} "
-        puts "The error was:", ex.message
+        puts "Error in merger thread for line #{elem[0][1].getChr + ':' + elem[0][1].getStart.to_s}. The error was: #{ex.message} "
       end
 
 		end
