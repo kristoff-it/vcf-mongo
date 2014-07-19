@@ -98,7 +98,7 @@ def merge_records(tuples, samples)
 		end
 		merged_record['IDs']     << record.getID
 		merged_record['QUALs']   << record.getPhredScaledQual
-		merged_record['FILTERs'] << record.getFiltersMaybeNull.map {|f| f} #lel
+		merged_record['FILTERs'] << record.getFilters.map {|f| f} #lel
 
 		infos = {}
 		record.getAttributes.each {|name, attribute| infos[name] = attribute}
@@ -126,6 +126,7 @@ def merge_records(tuples, samples)
 
 			merged_record['samples'] << sample
 		end
+
 	end
 	return merged_record
 end
