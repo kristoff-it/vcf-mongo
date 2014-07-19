@@ -125,6 +125,7 @@ def merge_records(tuples, samples)
 
 
 			merged_record['samples'] << sample
+		end
 	end
 	return merged_record
 end
@@ -293,7 +294,7 @@ def mongo_append_import(collection, queue, chunk_size)
 		if count == options[:mongo_chunk_size]
 		  	bulk.execute
 		  	count = 0
-		  	end
+		end
 	end
 	if count != 0
 	 	bulk.execute
