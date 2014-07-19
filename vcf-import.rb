@@ -219,14 +219,16 @@ end
 
 # Launch merger threads:
 merger_threads = []
+merger_error = nil
 options[:merger_threads].times do |index|
 	merger_threads << Thread.new do
 		while (elem = merger_buffer.pop) != :done
       begin
 			  mongo_buffer << merge_records(elem, samples)
       rescue => e
-        puts "Error in merger thread for line #{elem[0][1].getChr + ':' + elem[0][1].getStart.to_s}. The error was: #{ex.message} "
-      end
+        merger_error == ["Error in merger thread for line #{elem[0][1].getChr + ':' + elem[0][1].getStart.to_s}", " The error was: #{ex.message}"]
+        return
+     end
 
 		end
     # Each upload thread must see a :done for each merger thread:
@@ -261,6 +263,8 @@ if options[:queues]
 else
   mongo_threads.each {|t| t.join}
 end
+
+
 
 # Check if all mongo threads are ok and finalize the import operation:
 if mongo_threads_done.total == options[:mongo_threads]
