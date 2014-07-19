@@ -289,7 +289,7 @@ def mongo_append_import(collection, queue, options)
         	'samples' => {'$each' => elem['samples']}
         	}
         }
-        bulk.update(filtering_condition, update_operation, {:upsert => true})
+        bulk.find(filtering_condition).upsert.update(update_operation)
 
 		count += 1
 		if count == options[:mongo_chunk_size]
