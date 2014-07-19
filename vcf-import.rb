@@ -226,7 +226,7 @@ options[:merger_threads].times do |index|
       begin
 			  mongo_buffer << merge_records(elem, samples)
       rescue => e
-        merger_error = ["Error in merger thread for line #{elem[0][1].getChr + ':' + elem[0][1].getStart.to_s}", " The error was: #{ex.message}"]
+        merger_error = ["Error in merger thread for line #{elem[0][1].getChr + ':' + elem[0][1].getStart.to_s}", " The error was: #{ex.toString}"]
         return
      end
 
@@ -264,7 +264,8 @@ else
   mongo_threads.each {|t| t.join}
 end
 
-puts merger_error
+puts merger_error[0]
+puts merger_error[1]
 
 # Check if all mongo threads are ok and finalize the import operation:
 if mongo_threads_done.total == options[:mongo_threads]
