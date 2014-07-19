@@ -223,7 +223,12 @@ merger_error = nil
 options[:merger_threads].times do |index|
 	merger_threads << Thread.new do
 		while (elem = merger_buffer.pop) != :done
+      begin
 			  mongo_buffer << merge_records(elem, samples)
+      rescue => ex
+        puts "Merge error at position #{elem[0][1].getChr + ':' + elem[0][1].getStart.to_s}"
+        puts "error message:", ex.getMessage
+      end
 		end
     # Each upload thread must see a :done for each merger thread:
 		options[:mongo_threads].times { mongo_buffer << :done}
