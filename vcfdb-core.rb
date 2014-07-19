@@ -92,27 +92,57 @@ def merge_records(tuples, samples)
 			merged_record['IDs']     << nil
 			merged_record['QUALs']   << nil
 			merged_record['FILTERs'] << nil
-			merged_record['INFOs']   << {}
-			merged_record['samples'].concat([{}] * samples[array_index].length)
+			merged_record['INFOs']   << nil
+			merged_record['samples'].concat([nil] * samples[array_index].length)
 			array_index += 1
 		end
-		merged_record['IDs']     << record.getID.to_s
-		merged_record['QUALs']   << record.getPhredScaledQual.to_f
+		merged_record['IDs']     << record.getID
+		merged_record['QUALs']   << record.getPhredScaledQual
 		merged_record['FILTERs'] << record.getFiltersMaybeNull.map {|f| f} #lel
 
 		infos = {}
-		record.getAttributes.map {|name, attribute| infos[name] = attribute}
+		record.getAttributes.each {|name, attribute| infos[name] = attribute}
 		merged_record['INFOs']   << infos
-		#TODO: get all fields
-		record.getGenotypes.each {|gt| merged_record['samples'] << {'gt' => gt.getAlleles.map{|a| a.getDisplayString}}}
-	end
 
-	# puts merged_record
+		# Sample columns:
+		record.getGenotypes.each do |call|
+			# Standard fields:
+			sample = {'GT' => call.getAlleleStrings}
+			if call.hasAD
+				sample['AD'] = call.getAD
+			end
+			if call.hasDP
+				sample['DP'] = call.getDP
+			end
+			if call.hasGQ
+				sample['GQ'] = call.getGQ
+			end
+			if call.hasPL
+				sample['PL'] => call.getPL
+			end
+			# Extra fields:
+			call.getExtendedAttributes.each {|k, v| sample[k] = v}
+
+
+			merged_record['samples'] << sample
+	end
 	return merged_record
 end
 
 def update_untouched_records(dbconn, oldcounts, samples)
-    # dbconn.collection(collection).update({'samples' => {'$size' => number_of_previous_samples}}, {'$set' => {'$pushAll'}})
+	# Get all records that are missing the new samples by checking the sample list length:
+	filtering_condition = {'IDs' => {'$size' => oldcounts[:old_vcfs]}}
+
+	# Add nil for each empty slot:
+	vcfnil = [nil] * oldcounts[:old_vcfs]
+	update_operation = {'$push' => {
+		'IDs'     => {'$each' => vcfnil},
+		'QUALs'   => {'$each' => vcfnil},
+		'FILTERs' => {'$each' => vcfnil},
+		'INFOs'   => {'$each' => vcfnil},
+		'samples' => {'$each' => [nil] * oldcounts[:old_samples]}
+		}}
+	dbconn.collection(collection).update(filtering_condition, update_operation, {:multi => true})
 end
 
 def load_parsers(vcf_filenames)
@@ -204,6 +234,70 @@ end
 
 def flag_as_consistent(db, coll_name)
 	db.collection('__METADATA__').update({'_id' => coll_name}, {"$set" => {"consistent" => true}})
+end
+
+
+def mongo_direct_import(collection, queue, options)
+	bulk = collection.initialize_ordered_bulk_op
+	done_symbols_found = 0
+	count = 0
+	while done_symbols_found < options[:merger_threads]
+        elem = queue.pop
+        if elem == :done
+          done_symbols_found += 1
+          next
+        end
+		bulk.insert(elem)
+		count += 1
+		if count == options[:mongo_chunk_size]
+		  	bulk.execute
+		  	count = 0
+		  	end
+	end
+	if count != 0
+	 	bulk.execute
+	end
+end
+
+def mongo_append_import(collection, queue, chunk_size)
+	bulk = collection.initialize_ordered_bulk_op
+	done_symbols_found = 0
+	count = 0
+	while done_symbols_found < options[:merger_threads]
+        elem = queue.pop
+        if elem == :done
+          done_symbols_found += 1
+          next
+        end
+		
+        filtering_condition = {'_id' => elem['_id']}
+        update_operation = {
+        '$setOnInsert' => {
+        	'CHROM'   => elem['CHROM'],
+        	'POS'     => elem['POS'],
+        	'REF'     => elem['REF'],
+        	'snp'     => elem['snp']
+        	},
+
+        '$push' => {
+        	'IDs'     => {'$each' => elem['IDs']},
+        	'QUALs'   => {'$each' => elem['QUALs']},
+        	'FILTERs' => {'$each' => elem['FILTERs']},
+        	'INFOs'   => {'$each' => elem['INFOs']},
+        	'samples' => {'$each' => elem['samples']}
+        	}
+        }
+        bulk.update(filtering_condition, update_operation, {:upsert => true})
+
+		count += 1
+		if count == options[:mongo_chunk_size]
+		  	bulk.execute
+		  	count = 0
+		  	end
+	end
+	if count != 0
+	 	bulk.execute
+	end	
 end
 
 

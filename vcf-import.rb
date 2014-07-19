@@ -235,32 +235,11 @@ mongo_threads_done = Counter.new # threadsafe counter
 mongo_threads = []
 options[:mongo_threads].times do 
 	mongo_threads << Thread.new do
-		beginning = Time.now
-		count = 0
-		bulk = dbconn.collection(collection).initialize_ordered_bulk_op
-		start = Time.now
-    done_symbols_found = 0
-		while done_symbols_found < options[:merger_threads]
-        elem = mongo_buffer.pop
-        if elem == :done
-          done_symbols_found += 1
-          next
-        end
-
-		  	bulk.insert(elem)
-		  	count += 1
-		  	if count == options[:mongo_chunk_size]
-		  		bulk.execute
-		  		count = 0
-		 		print options[:mongo_chunk_size]/(Time.now - start)
-		  		start = Time.now
-		  	end
-		end
-		if count != 0
-		  	bulk.execute
-		end
-		ending = Time.now
-		# puts "collection count: #{coll.count} in #{ending - beginning} seconds"
+    if not options[:append]
+      mongo_direct_import(dbconn.collection(collection), mongo_buffer, options)
+    else
+      mongo_append_import(dbconn.collection(collection), mongo_buffer, options)
+    end
     mongo_threads_done.increment!
 	end 
 end
@@ -281,14 +260,15 @@ end
 # Check if all mongo threads are ok and finalize the import operation:
 if mongo_threads_done.total == options[:mongo_threads]
   if options[:append]
+    puts "Done importing new data, normalizing untouched records."
     update_untouched_records(dbconn, oldcounts, samples)
   end
   flag_as_consistent(dbconn, collection)
   puts "Import operations ended correctly."
 else
-  puts "Threads exited without aknowledging a complete operation." 
+  puts "Threads exited without aknowledging a successful completion." 
   puts "The collection has been left in an inconsistent state."
-  puts "Use vcf-admin to check (and fix) the collection state."
+  puts "Use vcf-admin to check (and fix) it."
 end
 
 # Bye!
