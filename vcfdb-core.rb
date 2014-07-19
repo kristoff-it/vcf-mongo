@@ -261,7 +261,7 @@ def mongo_direct_import(collection, queue, options)
 	end
 end
 
-def mongo_append_import(collection, queue, chunk_size)
+def mongo_append_import(collection, queue, options)
 	bulk = collection.initialize_ordered_bulk_op
 	done_symbols_found = 0
 	count = 0
