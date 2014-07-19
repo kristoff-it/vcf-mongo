@@ -188,9 +188,9 @@ end
 
 # Insert or update metadata inside the DB:
 if options[:append]
-  oldcount = update_metadata(dbconn, collection, vcf_filenames, headers, samples)
+  oldcounts = update_metadata(dbconn, collection, vcf_filenames, headers, samples)
 else
-  oldcount = init_metadata(dbconn, collection, vcf_filenames, headers, samples)
+  oldcounts = init_metadata(dbconn, collection, vcf_filenames, headers, samples)
 end
 
 # Instantiate queues:
