@@ -24,22 +24,20 @@ options = {
 	:append             => false,
 	:no_progress        => false,
 	:mongo_chunk_size   => 500,
-	:ignore_bad_info    => false,
+	# :ignore_bad_info    => false,
 	:merger_threads     => 3,
 	:mongo_threads      => 2,
 	:parser_buffer_size => 1000,
 	:merger_buffer_size => 1000,
-	:mongo_buffer_size  => 1000
+	:mongo_buffer_size  => 1000,
+  :drop_bad_records   => false,
 }
+# Flag to check if a thread reported an error:
+fatal_errors = false
 
 
 OptionParser.new do |opts|
   opts.banner = "Load VCF files into a collection.\n Usage: vcf-import.rb [options] collection file1.vcf file2.vcf ..."
-  #debug
-  opts.on("--queues",  
-    "Show queues") do |queues|
-    options[:queues] = queues
-  end
 
   # MongoDB connection options
   opts.on("--address HOSTNAME",  
@@ -56,10 +54,10 @@ OptionParser.new do |opts|
   end
 
   # Import options
-  opts.on("--ignore-bad-info", 
-  	"When specified, info fields that fail to respect their field definition (for example by having a string value inside an `Integer` field) are dropped with a warning. Other INFO fields from the same record are preserved if well formed.") do |ignore|
-    options[:ignore_bad_info] = ignore
-  end
+  # opts.on("--ignore-bad-info", 
+  # 	"When specified, info fields that fail to respect their field definition (for example by having a string value inside an `Integer` field) are dropped with a warning. Other INFO fields from the same record are preserved if well formed.") do |ignore|
+  #   options[:ignore_bad_info] = ignore
+  # end
   opts.on("--append",  
   	"Add the samples to a collection that might already have items inside (is slower than adding items to a new collection).") do |append|
     options[:append] = append
@@ -67,6 +65,10 @@ OptionParser.new do |opts|
   opts.on("--no-progress",  
   	"Disables showing of loading percentage completion, useful to remove clutter when logging stdout.") do |hide|
     options[:no_progress] = hide
+  end
+  opts.on("--drop-bad-records",  
+    "Drop malformed records without causing the whole import operation to fail. Info about dropped records is printed to STDOUT.") do |non_fatal_records|
+    options[:drop_bad_records] = non_fatal_records
   end
 
   # Performance tweaks
@@ -193,18 +195,28 @@ else
   oldcounts = init_metadata(dbconn, collection, vcf_filenames, headers, samples)
 end
 
-# Instantiate queues:
+# Instantiate buffer queues (and error queues):
 parser_buffers = parsers.length.times.map {SizedQueue.new(options[:parser_buffer_size])}
 merger_buffer = SizedQueue.new(options[:merger_buffer_size])
 mongo_buffer = SizedQueue.new(options[:mongo_buffer_size])
+
+parser_threads_errors = Queue.new
+aligner_thread_error = nil # since it's a single thread a queue isn't needed
+merger_threads_errors = Queue.new
+mongo_threads_errors = Queue.new
 
 # Launch parser threads:
 parser_threads = []
 parsers.length.times do |index|
 	parser_threads << Thread.new do
-		parsers[index].each do |record|
-			parser_buffers[index] << record
-		end
+    begin
+		  parsers[index].each do |record|
+			  parser_buffers[index] << record
+		  end
+    rescue => ex
+      parser_threads_errors << ex
+      fatal_errors = true
+    end
     # The aligner thread uses the :done element to check for end of queue:
 		parser_buffers[index] << :done
 	end
@@ -212,22 +224,29 @@ end
 
 # Launch aligner thread:
 aligner_thread = Thread.new do
-	VCFRecordAligner.new(parser_buffers).each {|r| merger_buffer << r}	
+  begin
+	  VCFRecordAligner.new(parser_buffers).each {|r| merger_buffer << r}
+  rescue => ex
+    aligner_thread_error = ex
+    fatal_errors = true
+  end
   # Must add a :done for each merger thread:
 	options[:merger_threads].times {merger_buffer << :done}
 end
 
 # Launch merger threads:
 merger_threads = []
-merger_error = nil
 options[:merger_threads].times do |index|
 	merger_threads << Thread.new do
 		while (elem = merger_buffer.pop) != :done
       begin
 			  mongo_buffer << merge_records(elem, samples)
       rescue => ex
-        puts "Merge error at position #{elem[0][1].getChr + ':' + elem[0][1].getStart.to_s}"
-        puts "error message:", ex.getMessage
+        merger_threads_errors << [elem, ex]
+        if not options[:drop_bad_records]
+          fatal_errors = true
+          break
+        end
       end
 		end
     # Each upload thread must see a :done for each merger thread:
@@ -238,45 +257,115 @@ end
 # Launch mongo threads:
 mongo_threads_done = Counter.new # threadsafe counter
 # (the counter exists to prevent the case where all threads die and we don't mark it as a failure)
+imported_records_counter = Counter.new
 mongo_threads = []
-options[:mongo_threads].times do 
+options[:mongo_threads].times do |index|
 	mongo_threads << Thread.new do
-    if not options[:append]
-      mongo_direct_import(dbconn.collection(collection), mongo_buffer, options)
-    else
-      mongo_append_import(dbconn.collection(collection), mongo_buffer, options)
+    begin 
+      if not options[:append]
+        mongo_direct_import(dbconn.collection(collection), mongo_buffer, options, imported_records_counter)
+      else
+        mongo_append_import(dbconn.collection(collection), mongo_buffer, options, imported_records_counter)
+      end
+      mongo_threads_done.increment!
+    rescue => ex
+      mongo_threads_errors[index] = ex
+      fatal_errors = true
     end
-    mongo_threads_done.increment!
 	end 
 end
 
 
-# Wait for all threads to exit:
-if options[:queues]
-  puts "Displaying queues saturation status:"
-  puts "(the order is: parsed-records queue, aligned-records queue, merged-records queue)"
-  while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
-	  print "\rP: #{parser_buffers[0].length} M: #{merger_buffer.length} DB: #{mongo_buffer.length} -- "
-	  $stdout.flush
-  end
-else
-  mongo_threads.each {|t| t.join}
+# Wait for all threads to exit and meanwhile show the progress status if enabled:
+if not options[:no_progress]
+  puts "Displaying total imported records, import speed and queues saturation status."
+  puts "(queue order is: parsed-records first queue | aligned-records queue | merged-records queue)"
+  puts "Sorry but completion percentage is not supported at the moment: https://github.com/samtools/htsjdk/issues/63\n"
 end
 
+start_timer = Time.now
+
+while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
+  if options[:drop_bad_records]
+    while not merger_threads_errors.empty?
+      item, ex = merger_threads_errors.pop
+      puts "\nDropping #{item[0][1].getChr}:#{item[0][1].getStart.to_s} => #{ex.getMessage}"
+    end
+  end
+
+  if fatal_errors
+    break
+  end
+
+  if not options[:no_progress]
+    total = imported_records_counter.total
+    speed = total/(Time.now - start_timer)
+    print "\r Total: #{total} @ #{speed.to_i} records/s (#{parser_buffers[0].length}|#{merger_buffer.length}|#{mongo_buffer.length})        "
+    $stdout.flush
+  end
+  sleep 0.5
+end
+
+puts "\n"
+
+# There might be some more errors that must be notified:
+if options[:drop_bad_records] and not fatal_errors
+  while not merger_threads_errors.empty?
+    item, ex = merger_threads_errors.pop
+    puts "\nDropping #{item[0][1].getChr}:#{item[0][1].getStart.to_s} => #{ex.getMessage}"
+  end
+end
 
 # Check if all mongo threads are ok and finalize the import operation:
-if mongo_threads_done.total == options[:mongo_threads]
+if fatal_errors
+  if not parser_threads_errors.empty?
+    puts "Errors were encountered while executing the initial parsing operation:"
+    while parser_threads_errors.empty?
+      err = parser_threads_errors.pop
+      puts err.getMessage
+      puts "\n"
+    end
+  end
+
+  if aligner_thread_error
+    puts "Errors were encountered while executing the alignment phase:"
+    puts aligner_thread_error.getMessage
+    puts "\n"
+  end
+
+  if not merger_threads_errors.empty?
+    puts "Errors were encountered while executing the merge phase (when records get mined for information):"
+    puts "Please note that most likely these errors are bubbling up directly from the HTSJDK parser."
+    while not merger_threads_errors.empty?
+      item, ex = merger_threads_errors.pop
+      puts "\n #{item[0][1].getChr}:#{item[0][1].getStart.to_s} => #{ex.getMessage}"
+      puts "\n"
+    end
+  end
+
+  if not mongo_threads_errors.empty?
+    puts "Errors were encountered while executing mongo bulk insert/update operations:"
+    while not mongo_threads_errors.empty?
+      err = mongo_threads_errors.pop
+      puts err.getMessage
+      puts "\n"
+    end
+  end
+
+end
+
+if mongo_threads_done.total == options[:mongo_threads] and not fatal_errors
   if options[:append]
     puts "Done importing new data, normalizing untouched records."
     update_untouched_records(dbconn, oldcounts, samples)
   end
   flag_as_consistent(dbconn, collection)
   puts "Import operations ended correctly."
+  puts 'Done.'
 else
   puts "Threads exited without aknowledging a successful completion." 
   puts "The collection has been left in an inconsistent state."
   puts "Use vcf-admin to check (and fix) it."
 end
 
-# Bye!
-puts 'Done.'
+

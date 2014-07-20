@@ -9,6 +9,13 @@ include Mongo
 
 java_import "org.broadinstitute.variant.vcf.VCFFileReader"
 
+# Uniform way of accessing error messages between Java exceptions and the Ruby ones.
+class StandardError
+	def getMessage
+		return self.message
+	end
+end
+
 # The VCFRecordAligner performs (as one might imagine)
 # the alingment of multiple VCF files in order to be able
 # to perform merging operations concurrently.
@@ -239,7 +246,7 @@ def flag_as_consistent(db, coll_name)
 end
 
 
-def mongo_direct_import(collection, queue, options)
+def mongo_direct_import(collection, queue, options, total_counter)
 	bulk = collection.initialize_ordered_bulk_op
 	done_symbols_found = 0
 	count = 0
@@ -252,14 +259,8 @@ def mongo_direct_import(collection, queue, options)
 		bulk.insert(elem)
 		count += 1
 		if count == options[:mongo_chunk_size]
-		  	begin
-		  		bulk.execute
-		  	rescue => ex
-		  		puts 'Error in mongo bulk operation:'
-		  		puts elem
-			  p ex
-  			  pp ex.result
-		  	end
+			bulk.execute
+			total_counter.add(count)
 		  	count = 0
 		  	end
 	end
@@ -268,7 +269,7 @@ def mongo_direct_import(collection, queue, options)
 	end
 end
 
-def mongo_append_import(collection, queue, options)
+def mongo_append_import(collection, queue, options, total_counter)
 	bulk = collection.initialize_ordered_bulk_op
 	done_symbols_found = 0
 	count = 0
@@ -301,6 +302,7 @@ def mongo_append_import(collection, queue, options)
 		count += 1
 		if count == options[:mongo_chunk_size]
 		  	bulk.execute
+		  	total_counter.add(count)
 		  	count = 0
 		end
 	end
@@ -321,5 +323,9 @@ class Counter
 
   def increment!
     @mutex.synchronize { @total += 1 }
+  end
+
+  def add (value)
+  	@mutex.synchronize { @total += value }
   end
 end
