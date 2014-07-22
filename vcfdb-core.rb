@@ -204,8 +204,11 @@ def check_collection(db, coll_name)
 	if meta['consistent']
 		return :consistent
 	end
+	if meta['last_inconsistency_reason'][0] == 'INIT'
+		return :INIT
+	end
 
-	return :inconsistent
+	return :APPEND
 end
 
 def init_metadata(db, coll_name, files, headers, samples)
@@ -329,3 +332,96 @@ class Counter
   	@mutex.synchronize { @total += value }
   end
 end
+
+
+
+def list_collections(db)
+	return db.collection('__METADATA__').find({'_id' => {'$ne'=> '__METADATA__'}}, {:fields => '_id'}).map {|c| c['_id']}
+end
+
+def collection_details(db, coll_name)
+	if (result = db.collection('__METADATA__').find_one('_id' => coll_name)) == nil
+		raise "collection does not exist"
+	end
+	return result
+end
+
+def rename_collection(db, coll_name, new_name)
+	collections = db.collection_names
+
+	if not collections.include? coll_name
+		raise "collection does not exist"
+	end
+	if collections.include? new_name
+		raise "target collection already exists"
+	end
+
+	db.collection(coll_name).rename(new_name)
+	metadata = db.collection('__METADATA__').find_one('_id' => coll_name)
+	metadata['_id'] = new_name
+	db.collection('__METADATA__').insert(metadata)
+	db.collection('__METADATA__').remove('_id' => coll_name)
+end
+
+def delete_collection(db, coll_name)
+	if db.collection('__METADATA__').find_one('_id' => coll_name) == nil
+		raise "collection does not exist"
+	end
+
+	db.collection('coll_name').drop
+	db.collection('__METADATA__').remove('_id' => coll_name)
+end
+
+
+
+
+def bad_collections(db)
+	return db.collection('__METADATA__').find('_id' => {'$ne' => '__METADATA__'}, 'consistent' => false).map do |c|
+		if c['last_inconsistency_reason'][0] == 'INIT'
+			{:name => c['_id'], :reason => 'Initial import operation non complete.'}
+		else
+			{:name => c['_id'], :reason => "Append import non complete (#{c['last_inconsistency_reason'][1].join(', ')})"}
+		end
+	end
+end
+
+def fix_collection(db, collection, fixtype)
+	case fixtype
+	when :spuriousM
+		db.collection('__METADATA__').remove('_id' => collection)
+	when :INIT
+		db.collection(collection).drop
+		db.collection('__METADATA__').remove('_id' => collection)
+	when :APPEND
+		update_operation = {'$push' => 
+			{
+				'IDs' => {
+					'$each' => [],
+					'$slice'=> number_of_good_vcfs,
+				}
+				'QUALs' => {
+					'$each' => [],
+					'$slice'=> number_of_good_vcfs,
+					}, 
+				'FILTERs' => {
+					'$each' => [],
+					'$slice'=> number_of_good_vcfs,
+					},
+				'INFOs' => {
+					'$each' => [],
+					'$slice'=> number_of_good_vcfs,
+					},
+				'samples' => {
+					'$each' => [],
+					'$slice'=> number_of_good_samples,
+					}
+			}
+		}
+
+		metadata = db.collection('__METADATA__').find_one('_id' => collection)
+		bad_vcfs = metadata['last_inconsistency_reason'][1]
+		number_of_good_samples = metadata['samples'].length - metadata['samples'].keep_if{|k, v| v >= metadata['vcfs'].index(bad_vcfs[0])}.length
+		number_of_good_vcfs = metadata['vcfs'].length - bad_vcfs.length
+		db.collection(collection).update({}, update_operation, {:multi => true})
+end
+

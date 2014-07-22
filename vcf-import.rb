@@ -284,6 +284,7 @@ if not options[:no_progress]
 end
 
 start_timer = Time.now
+previous_line_length = 0
 
 while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
   if options[:drop_bad_records]
@@ -300,10 +301,15 @@ while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
   if not options[:no_progress]
     total = imported_records_counter.total
     speed = total/(Time.now - start_timer)
-    print "\r Total: #{total} @ #{speed.to_i} records/s (#{parser_buffers[0].length}|#{merger_buffer.length}|#{mongo_buffer.length})        "
+    line =  "\r Total: #{total} @ #{speed.to_i} records/s (#{parser_buffers[0].length}|#{merger_buffer.length}|#{mongo_buffer.length})"
+    if (num_spaces = (previous_line_length - line.length)) > 0
+      line += ' ' * num_spaces
+    end
+    previous_line_length = line.length
+    print line
     $stdout.flush
   end
-  sleep 0.5
+  sleep 0.2
 end
 
 puts "\n"
