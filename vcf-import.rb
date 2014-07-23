@@ -300,7 +300,7 @@ while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
 
   if not options[:no_progress]
     total = imported_records_counter.total
-    speed = total/(Time.now - start_timer)
+    speed = total/(Time.now + 0.001 - start_timer)
     line =  "\r Total: #{total} @ #{speed.to_i} records/s (#{parser_buffers[0].length}|#{merger_buffer.length}|#{mongo_buffer.length})"
     if (num_spaces = (previous_line_length - line.length)) > 0
       line += ' ' * num_spaces
@@ -363,7 +363,7 @@ end
 if mongo_threads_done.total == options[:mongo_threads] and not fatal_errors
   if options[:append]
     puts "Done importing new data, normalizing untouched records."
-    update_untouched_records(dbconn, oldcounts, samples)
+    update_untouched_records(dbconn, collection, oldcounts, samples)
   end
   flag_as_consistent(dbconn, collection)
   puts "Import operations ended correctly."

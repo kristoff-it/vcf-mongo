@@ -157,7 +157,7 @@ when 'fix'
 			puts "This collection is consistent. Nothing to do.\n"
 		when :spuriousM
 			puts "This collection has spurious metadata remaining."
-			puts "The spurious metadata will now be deleted.\n"
+			puts "It will now be deleted.\n"
 			begin
 				fix_collection(dbconn, ARGV[1], :spuriousM)
 			rescue => ex
@@ -165,10 +165,10 @@ when 'fix'
 			end
 		when :INIT
 			puts "This collection has not completed its import operation."
-			puts "The collection will now be deleted.\n"
+			puts "It will now be deleted.\n"
 			if not options[:force]
-				puts "!! WARNING: THIS OPERATION IS NOT REVERSIBLE !!"
-				puts " --> PLEASE MAKE SURE THE OPERATION IS NOT STILL RUNNING <--"
+				puts "!!           WARNING: THIS OPERATION IS NOT REVERSIBLE           !!"
+				puts " --> PLEASE MAKE SURE THE IMPORT OPERATION IS NOT STILL RUNNING <--"
 				puts "Then type again the name of the collection you want to delete:\n"
 				test = gets.chomp
 				if test != ARGV[1]
@@ -182,10 +182,10 @@ when 'fix'
 			end
 		when :APPEND
 			puts "This collection has not completed its latest append import operation."
-			puts "The collection will now be reverted by removing the partially-imported VCF files.\n"
+			puts "It will now be reverted by removing the partially-imported VCF files.\n"
 			if not options[:force]
-				puts "!! WARNING: THIS OPERATION IS NOT REVERSIBLE !!"
-				puts " --> PLEASE MAKE SURE THE OPERATION IS NOT STILL RUNNING <--"
+				puts "!!           WARNING: THIS OPERATION IS NOT REVERSIBLE           !!"
+				puts " --> PLEASE MAKE SURE THE IMPORT OPERATION IS NOT STILL RUNNING <--"
 				puts "Then type again the name of the collection you want to revert:\n"
 				test = gets.chomp
 				if test != ARGV[1]
@@ -200,7 +200,7 @@ when 'fix'
 		end
 	end
 	# If we haven't aborted:
-	puts "Operation completed succesfully.\n\n"
+	puts "Operation completed successfully.\n\n"
 
 else
 	abort("Invalid command. Valid commands are: \n list, rename, delete, check, fix")

@@ -34,3 +34,5 @@ build/
 .rvmrc
 
 test/
+
+mongodb/

@@ -138,7 +138,7 @@ def merge_records(tuples, samples)
 	return merged_record
 end
 
-def update_untouched_records(dbconn, oldcounts, samples)
+def update_untouched_records(dbconn, coll_name, oldcounts, samples)
 	# Get all records that are missing the new samples by checking the sample list length:
 	filtering_condition = {'IDs' => {'$size' => oldcounts[:old_vcfs]}}
 
@@ -151,7 +151,7 @@ def update_untouched_records(dbconn, oldcounts, samples)
 		'INFOs'   => {'$each' => vcfnil},
 		'samples' => {'$each' => [nil] * oldcounts[:old_samples]}
 		}}
-	dbconn.collection(collection).update(filtering_condition, update_operation, {:multi => true})
+	dbconn.collection(coll_name).update(filtering_condition, update_operation, {:multi => true})
 end
 
 def load_parsers(vcf_filenames)
@@ -393,35 +393,46 @@ def fix_collection(db, collection, fixtype)
 		db.collection(collection).drop
 		db.collection('__METADATA__').remove('_id' => collection)
 	when :APPEND
-		update_operation = {'$push' => 
-			{
-				'IDs' => {
-					'$each' => [],
-					'$slice'=> number_of_good_vcfs,
-				}
-				'QUALs' => {
-					'$each' => [],
-					'$slice'=> number_of_good_vcfs,
-					}, 
-				'FILTERs' => {
-					'$each' => [],
-					'$slice'=> number_of_good_vcfs,
-					},
-				'INFOs' => {
-					'$each' => [],
-					'$slice'=> number_of_good_vcfs,
-					},
-				'samples' => {
-					'$each' => [],
-					'$slice'=> number_of_good_samples,
-					}
-			}
-		}
-
 		metadata = db.collection('__METADATA__').find_one('_id' => collection)
 		bad_vcfs = metadata['last_inconsistency_reason'][1]
-		number_of_good_samples = metadata['samples'].length - metadata['samples'].keep_if{|k, v| v >= metadata['vcfs'].index(bad_vcfs[0])}.length
+
+		first_bad_vcf = metadata['vcfs'].index(bad_vcfs[0])
+		if first_bad_vcf == nil
+			raise "the metadata state is incoherent"
+		end
+		bad_samples = []
+		metadata['samples'].each do |s| 
+			if s['vcfid'] >= first_bad_vcf
+				bad_samples << s['name']
+			end
+		end
+
+		number_of_good_samples = metadata['samples'].length - bad_samples.length
 		number_of_good_vcfs = metadata['vcfs'].length - bad_vcfs.length
+
+		update_operation = {
+			'$push' => {
+				'IDs'     => {'$each' => [], '$slice'=> number_of_good_vcfs},
+				'QUALs'   => {'$each' => [], '$slice'=> number_of_good_vcfs}, 
+				'FILTERs' => {'$each' => [], '$slice'=> number_of_good_vcfs},
+				'INFOs'   => {'$each' => [], '$slice'=> number_of_good_vcfs},
+				'samples' => {'$each' => [], '$slice'=> number_of_good_samples}
+				}
+			}
+
 		db.collection(collection).update({}, update_operation, {:multi => true})
+
+		metadata_update_operation = {
+			'$set' => {'consistent' => true}, 
+			'$push' => {
+				'vcfs'    => {'$each' => [], '$slice' => number_of_good_vcfs},
+				'headers' => {'$each' => [], '$slice' => number_of_good_vcfs},
+				'samples' => {'$each' => [], '$slice'=> number_of_good_samples}
+				},
+			}
+		db.collection('__METADATA__').update({'_id' => collection}, metadata_update_operation)
+	else
+		raise "unknown error state, fix_collection() doesn't know what to do!"
+	end
 end
 
