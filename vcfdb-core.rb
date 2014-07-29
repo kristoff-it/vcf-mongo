@@ -159,6 +159,7 @@ def load_parsers(vcf_filenames)
 	parsers = files.map {|f| VCFFileReader.new(f, false)}
 	headers = parsers.map {|p| p.getFileHeader.getMetaDataInInputOrder.map {|m| m.toString}}
 	samples = parsers.map {|p| p.getFileHeader.getSampleNameToOffset.sort.map {|k,v| k}}
+	parsers.each {|p| puts "TIPO ITERATORE", p.iterator.getClass.getName}
 	return files, parsers, headers, samples
 end
 
@@ -432,7 +433,102 @@ def fix_collection(db, collection, fixtype)
 			}
 		db.collection('__METADATA__').update({'_id' => collection}, metadata_update_operation)
 	else
-		raise "unknown error state, fix_collection() doesn't know what to do!"
+		raise "unknown error state, fix_collection() doesn't know what to do"
 	end
+end
+
+def build_private_filters(options, good_samples, bad_samples)
+	filtering_js = 
+	"""
+	function () {
+
+		good_samples = #{good_samples.to_s};
+		bad_samples = #{bad_samples.to_s};
+
+		good_genotype = null;
+		good_genotype_is_ref = true;
+		if (this.samples[good_samples[0]]){
+			good_genotype = this.samples[good_samples[0]].GT;
+			for (i = 0; i < good_genotype.length; i++)
+				if (good_genotype[i] != this.REF){
+					good_genotype_is_ref = false;
+					break;
+				}
+		}
+
+		for(i = 1; i < good_samples.length; i++){
+			if (good_genotype_is_ref){
+				if (this.samples[good_samples[i]])
+					for (j = 0; j < this.samples[good_samples[i]].GT.length; j++)
+						if (this.samples[good_samples[i]].GT[j] != this.REF)
+							return false;					
+			}else{
+				if (!this.samples[good_samples[i]])
+					return false;
+				else
+					for (j = 0; j < this.samples[good_samples[i]].GT.length; j++)
+						if (this.samples[good_samples[i]].GT[j] != good_genotype[j])
+							return false;
+			}
+		}
+
+		for(i = 0; i < bad_samples.length; i++){
+			if (good_genotype_is_ref){
+				if(!this.samples[bad_samples[i]])
+					return false;
+				else
+					for (j = 0; j < this.samples[bad_samples[i]].GT.length; j++){
+						if (this.samples[bad_samples[i]].GT[j] != this.REF)
+							break;
+						if (j == this.samples[bad_samples[i]].GT.length - 1)
+							return false;
+					}
+			}else{
+				if (this.samples[bad_samples[i]])
+					for (j = 0; j < this.samples[bad_samples[i]].GT.length; j++){
+						if (this.samples[bad_samples[i]].GT[j] != good_genotype[j])
+							break;
+						if (j == this.samples[bad_samples[i]].GT.length - 1)
+							return false;
+					}
+			}
+		}
+
+		return true;
+
+	}
+	"""
+	filters = {}
+	if options[:only_snps]
+		filters['snp'] = true
+	end
+	if options[:apply_filters]
+		filters['FILTERs'] =  {'$not' => /^(?!(PASS)|(\.))/}
+	end
+	if options[:min_qual] > 0
+		# filters['QUALs'] = {'$gt' => options[:min_qual]}
+	end
+
+	filters['$where'] = filtering_js;
+	return filters
+
+end
+
+def get_sample_ids(db, coll_name, samples)
+	meta = db.collection('__METADATA__').find_one('_id'=> coll_name)
+	if not meta
+		raise "unable to find metadata regarding this collection"
+	end
+	sample2id = {}
+	meta['samples'].each_with_index {|s, i| sample2id[s['name']] = i}
+	ids = []
+	samples.each do |n| 
+		x = sample2id[n] 
+		if x == nil
+			raise "unable to find the sample"
+		end
+		ids << x
+	end
+	return ids
 end
 

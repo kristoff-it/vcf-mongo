@@ -56,6 +56,10 @@ when :empty
 end
 
 # Execute the command:
+if ARGV.length == 0
+	abort("Must be called with a command. Valid commands are: \n list, rename, delete, check, fix ")
+end
+
 case ARGV[0]
 when 'list'
 	if ARGV.length == 1 
@@ -92,10 +96,8 @@ when 'rename'
 	if ARGV.length != 3
 		abort("The `rename` command requires 2 positional arguments. \nUsage: rename COLLECTION NEWNAME")
 	end
-	collection = ARGV[1]
-	newname = ARGV[2]
 	begin
-		rename_collection(dbconn, collection, newname)
+		rename_collection(dbconn, ARGV[1], ARGV[2])
 		puts "Collection renamed successfully."
 	rescue => ex
 		abort("Unable to rename the collection: #{ex.message}")
@@ -118,7 +120,6 @@ when 'delete'
 	if ARGV.length != 2
 		abort("The `delete` command requires 1 positional argument. \nUsage: delete COLLECTION [--force]")
 	end
-	collection = ARGV[1]
 	if not options[:force]
 		puts "!! WARNING: THIS OPERATION IS NOT REVERSIBLE !!"
 		puts "Please type again the name of the collection you want to delete:\n"
@@ -128,7 +129,7 @@ when 'delete'
 		end
 	end
 	begin 
-		delete_collection(dbconn, collection)
+		delete_collection(dbconn, ARGV[1])
 		puts "Collection deleted successfully."
 	rescue => ex
 		abort("Unable to delete the collection: #{ex.message}")
@@ -182,7 +183,10 @@ when 'fix'
 			end
 		when :APPEND
 			puts "This collection has not completed its latest append import operation."
-			puts "It will now be reverted by removing the partially-imported VCF files.\n"
+			puts "It will now be reverted by removing the partially-imported VCF files."
+			puts "(if you stop the revert operation, when called again, the script will"
+			puts "resume from where it left off, in other words no progress is lost)\n"
+
 			if not options[:force]
 				puts "!!           WARNING: THIS OPERATION IS NOT REVERSIBLE           !!"
 				puts " --> PLEASE MAKE SURE THE IMPORT OPERATION IS NOT STILL RUNNING <--"
