@@ -49,9 +49,9 @@ OptionParser.new do |opts|
   	"Minimum value require for the QUAL field for a record to be considered.") do |minqual|
     options[:min_qual] = minqual
   end  
-  opts.on("--against MINQUAL",  
-  	"Minimum value require for the QUAL field for a record to be considered.") do |minqual|
-    options[:min_qual] = minqual
+  opts.on("--against BADGROUP", Array,  
+  	"Minimum value require for the QUAL field for a record to be considered.") do |badgroup|
+    options[:bad_group] = badgroup
   end  
 end.parse!
 

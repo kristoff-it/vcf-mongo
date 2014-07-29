@@ -16,6 +16,48 @@ class StandardError
 	end
 end
 
+
+class Record
+    attr_reader :CHROM, :POS, :ID, :REF, :QUAL, :FILTER, :INFO, :meta, :samples
+	def initialize (parser_record)
+		@CHROM   = parser_record.getChr
+		@POS     = parser_record.getStart
+		@ID      = parser_record.getID
+		@REF     = parser_record.getReference.getBaseString
+		@QUAL    = parser_record.getPhredScaledQual
+		@FILTER  = parser_record.getFilters.map {|f| f}
+		@INFO    = Hash[parser_record.getAttributes.map {|name, attribute| [name, attribute] }]
+		@meta    = {'snp' => parser_record.isSNP}
+		@samples = parser_record.getGenotypes.map do |call|
+			
+			# Standard fields:
+			sample = {'GT' => call.getAlleleStrings}
+			if call.hasAD
+				sample['AD'] = call.getAD
+			end
+			if call.hasDP
+				sample['DP'] = call.getDP
+			end
+			if call.hasGQ
+				sample['GQ'] = call.getGQ
+			end
+			if call.hasPL
+				sample['PL'] = call.getPL.map{|e| e}
+			end
+
+			# Extra fields:
+			call.getExtendedAttributes.each {|k, v| sample[k] = v}
+
+			sample
+		end
+	end
+
+	def to_s
+		"<#{@CHROM}:#{@POS} - #{@samples.map{|s| s['GT'].toString}}>"
+	end
+end
+
+
 # The VCFRecordAligner performs (as one might imagine)
 # the alingment of multiple VCF files in order to be able
 # to perform merging operations concurrently.
@@ -51,8 +93,8 @@ class VCFRecordAligner < Enumerator
 	 				return
 	 			end
 
-	 			chrom = record.getChr
-	 			pos = record.getStart
+	 			chrom = record.CHROM
+	 			pos = record.POS
 
 		 		case self.compare(chrom, pos, current_chrom, current_pos)
 		 		when -1 
@@ -80,60 +122,38 @@ class VCFRecordAligner < Enumerator
 end
 
 
+
+
 def merge_records(tuples, samples)
 	merged_record = {
-		'_id'     => tuples[0][1].getChr + ':' + tuples[0][1].getStart.to_s,
-		'CHROM'   => tuples[0][1].getChr,
-		'POS'     => tuples[0][1].getStart,
+		'_id'     => tuples[0][1].CHROM + ':' + tuples[0][1].POS.to_s,
+		'CHROM'   => tuples[0][1].CHROM,
+		'POS'     => tuples[0][1].POS,
 		'IDs'     => [],
-		'REF'     => tuples[0][1].getReference.getBaseString,
+		'REFs'    => [],
 		'QUALs'   => [],
 		'FILTERs' => [],
 		'INFOs'   => [],
 		'samples' => [],
-		'snp'     => tuples[0][1].isSNP
+		'meta'    => tuples[0][1].meta
 	}
 	array_index = 0
 	tuples.each do |id, record|
 		while id > array_index
 			merged_record['IDs']     << nil
+			merged_record['REFs']    << nil
 			merged_record['QUALs']   << nil
 			merged_record['FILTERs'] << nil
 			merged_record['INFOs']   << nil
 			merged_record['samples'].concat([nil] * samples[array_index].length)
 			array_index += 1
 		end
-		merged_record['IDs']     << record.getID
-		merged_record['QUALs']   << record.getPhredScaledQual
-		merged_record['FILTERs'] << record.getFilters.map {|f| f} #lel
-
-		infos = {}
-		record.getAttributes.each {|name, attribute| infos[name] = attribute}
-		merged_record['INFOs']   << infos
-
-		# Sample columns:
-		record.getGenotypes.each do |call|
-			# Standard fields:
-			sample = {'GT' => call.getAlleleStrings}
-			if call.hasAD
-				sample['AD'] = call.getAD
-			end
-			if call.hasDP
-				sample['DP'] = call.getDP
-			end
-			if call.hasGQ
-				sample['GQ'] = call.getGQ
-			end
-			if call.hasPL
-				sample['PL'] = call.getPL.map{|e| e}
-			end
-			# Extra fields:
-			call.getExtendedAttributes.each {|k, v| sample[k] = v}
-
-
-			merged_record['samples'] << sample
-		end
-
+		merged_record['IDs']     << record.ID
+		merged_record['REFs']    << record.REF
+		merged_record['QUALs']   << record.QUAL
+		merged_record['FILTERs'] << record.FILTER
+		merged_record['INFOs']   << record.INFO
+		merged_record['samples'].concat(record.samples)
 	end
 	return merged_record
 end
@@ -146,6 +166,7 @@ def update_untouched_records(dbconn, coll_name, oldcounts, samples)
 	vcfnil = [nil] * oldcounts[:old_vcfs]
 	update_operation = {'$push' => {
 		'IDs'     => {'$each' => vcfnil},
+		'REFs'    => {'$each' => vcfnil},
 		'QUALs'   => {'$each' => vcfnil},
 		'FILTERs' => {'$each' => vcfnil},
 		'INFOs'   => {'$each' => vcfnil},
@@ -159,7 +180,6 @@ def load_parsers(vcf_filenames)
 	parsers = files.map {|f| VCFFileReader.new(f, false)}
 	headers = parsers.map {|p| p.getFileHeader.getMetaDataInInputOrder.map {|m| m.toString}}
 	samples = parsers.map {|p| p.getFileHeader.getSampleNameToOffset.sort.map {|k,v| k}}
-	parsers.each {|p| puts "TIPO ITERATORE", p.iterator.getClass.getName}
 	return files, parsers, headers, samples
 end
 
@@ -289,12 +309,12 @@ def mongo_append_import(collection, queue, options, total_counter)
         '$setOnInsert' => {
         	'CHROM'   => elem['CHROM'],
         	'POS'     => elem['POS'],
-        	'REF'     => elem['REF'],
-        	'snp'     => elem['snp']
+        	'meta'    => elem['meta']
         	},
 
         '$push' => {
         	'IDs'     => {'$each' => elem['IDs']},
+        	'REFs'    => {'$each' => elem['REFs']},
         	'QUALs'   => {'$each' => elem['QUALs']},
         	'FILTERs' => {'$each' => elem['FILTERs']},
         	'INFOs'   => {'$each' => elem['INFOs']},
@@ -414,6 +434,7 @@ def fix_collection(db, collection, fixtype)
 		update_operation = {
 			'$push' => {
 				'IDs'     => {'$each' => [], '$slice'=> number_of_good_vcfs},
+				'REFs'    => {'$each' => [], '$slice'=> number_of_good_vcfs},
 				'QUALs'   => {'$each' => [], '$slice'=> number_of_good_vcfs}, 
 				'FILTERs' => {'$each' => [], '$slice'=> number_of_good_vcfs},
 				'INFOs'   => {'$each' => [], '$slice'=> number_of_good_vcfs},

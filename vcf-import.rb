@@ -211,7 +211,7 @@ parsers.length.times do |index|
 	parser_threads << Thread.new do
     begin
 		  parsers[index].each do |record|
-			  parser_buffers[index] << record
+			  parser_buffers[index] << Record.new(record)
 		  end
     rescue => ex
       parser_threads_errors << ex
@@ -290,7 +290,7 @@ while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
   if options[:drop_bad_records]
     while not merger_threads_errors.empty?
       item, ex = merger_threads_errors.pop
-      puts "\nDropping #{item[0][1].getChr}:#{item[0][1].getStart.to_s} => #{ex.getMessage}"
+      puts "\nDropping #{item[0][1].CHROM}:#{item[0][1].POS} => #{ex.getMessage}"
     end
   end
 
@@ -318,7 +318,7 @@ puts "\n"
 if options[:drop_bad_records] and not fatal_errors
   while not merger_threads_errors.empty?
     item, ex = merger_threads_errors.pop
-    puts "\nDropping #{item[0][1].getChr}:#{item[0][1].getStart.to_s} => #{ex.getMessage}"
+    puts "\nDropping #{item[0][1].CHROM}:#{item[0][1].POS} => #{ex.getMessage}"
   end
 end
 
@@ -344,7 +344,7 @@ if fatal_errors
     puts "Please note that most likely these errors are bubbling up directly from the HTSJDK parser."
     while not merger_threads_errors.empty?
       item, ex = merger_threads_errors.pop
-      puts "\n #{item[0][1].getChr}:#{item[0][1].getStart.to_s} => #{ex.getMessage}"
+      puts "\n #{item[0][1].CHROM}:#{item[0][1].POS} => #{ex.getMessage}"
       puts "\n"
     end
   end
