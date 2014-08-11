@@ -391,6 +391,7 @@ def mongo_append_import(collection, queue, options, total_counter)
    end
    if count != 0
       bulk.execute
+      total_counter.add(count)
    end 
 end
 

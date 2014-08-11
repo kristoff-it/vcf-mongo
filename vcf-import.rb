@@ -1,3 +1,4 @@
+#!/usr/bin/env jruby
 require 'set'
 require 'optparse'
 
@@ -278,7 +279,7 @@ end
 # Wait for all threads to exit and meanwhile show the progress status if enabled:
 if not options[:no_progress]
    puts "Displaying total imported records, import speed and queues saturation status."
-   puts "(queue order is: parsed-records first queue | aligned-records queue | merged-records queue)"
+   puts "(queue order is: parser | merger | mongo )"
    puts "Sorry but completion percentage is not supported at the moment: https://github.com/samtools/htsjdk/issues/63\n"
 end
 
@@ -300,7 +301,7 @@ while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
    if not options[:no_progress]
       total = imported_records_counter.total
       speed = total/(Time.now + 0.001 - start_timer)
-      line =  "\r Total: #{total} @ #{speed.to_i} records/s (#{parser_buffers[0].length}|#{merger_buffer.length}|#{mongo_buffer.length})"
+      line =  "\rTotal: #{total} @ #{speed.to_i} records/s (#{parser_buffers[0].length}|#{merger_buffer.length}|#{mongo_buffer.length})"
       if (num_spaces = (previous_line_length - line.length)) > 0
          line += ' ' * num_spaces
       end
@@ -309,6 +310,14 @@ while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
       $stdout.flush
    end
    sleep 0.2
+end
+
+if not options[:no_progress]
+   line = "\rImported #{imported_records_counter.total} records in #{Time.now - start_timer} secods."
+   if (num_spaces = (previous_line_length - line.length)) > 0
+      line += ' ' * num_spaces
+   end
+   puts line
 end
 
 puts "\n"

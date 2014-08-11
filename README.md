@@ -27,13 +27,13 @@ Basic example:
 
 You can use the `-h` flag to see all options.
 
-The parametric options are:
+Parametric options:
 * Connection: `--address`, `--port`
 * Database selection: `--database`
 * Number of threads that do the merge operations / execute the import queries: `--mongo-threads`, `--merge-threads`
 * Size of each thread's work buffer: `--parser-buffer-size`, `--merger-buffer-size`, `--mongo-buffer-size`
 
-The switches are:
+Switches:
 * Enable the (slower) import into an existing collection: `--append`
 * Drop bad records without causing the whole opration to fail (bad as in 'rejected by the HTSJDK parser'): `--drop-bad-records` (a warning is printed to STDERR for each dropped record)
 * Disable the showing of import speed and buffer saturation (which would take a lot of space when logging STDOUT): `--no-progress`
@@ -65,8 +65,10 @@ Use `vcf-admin.rb`.
 The commands are: 
 * `list`: to obtain the list of all collection present or details about a single collection
 * `rename`, `delete`: what the command says
-* `check`: collection that have an import operation that didn't end correctly are flagged as *inconsistent* this command lists them
+* `check`: collections that have an import operation that didn't complete are flagged as *inconsistent*; this command lists them
 * `fix`: fix an inconsistent collection
+
+You can use the `-h` flag to see all options.
 
 Destructive operations (`delete`, `fix`) require confirmation unless the `--force` option is specified.
 
