@@ -298,7 +298,8 @@ def init_metadata(db, coll_name, files, headers, samples)
       'headers'                   => headers,
       'samples'                   => samples_field,
       'consistent'                => false,
-      'last_inconsistency_reason' => ['INIT']
+      'last_inconsistency_reason' => ['INIT'],
+      'last_edit'                 => Time.now,
    }
    db.collection('__METADATA__').insert(meta)
    return {:old_vcfs => 0, :old_samples => 0}
@@ -314,7 +315,8 @@ def update_metadata(db, coll_name, files, headers, samples)
       'headers'                   => dbmeta['headers'] + headers,
       'samples'                   => dbmeta['samples'] + samples_field,
       'consistent'                => false,
-      'last_inconsistency_reason' => ['APPEND', files]
+      'last_inconsistency_reason' => ['APPEND', files],
+      'last_edit'                 => Time.now
    }
    db.collection('__METADATA__').update({'_id' => coll_name}, {'$set' => meta})
    return {:old_vcfs => dbmeta['vcfs'].length, :old_samples => dbmeta['samples'].length}
@@ -435,6 +437,9 @@ def rename_collection(db, coll_name, new_name)
    end
 
    db.collection(coll_name).rename(new_name)
+   db.collection_names.keep_if{|c| c.start_with? coll_name + '__'}.each do |related_collection|
+      db.collection(related_collection).rename(new_name + '__' + related_collection.split('__', 2)[1])
+   end
    metadata = db.collection('__METADATA__').find_one('_id' => coll_name)
    metadata['_id'] = new_name
    db.collection('__METADATA__').insert(metadata)
@@ -446,7 +451,9 @@ def delete_collection(db, coll_name)
       raise "collection does not exist"
    end
 
-   db.collection('coll_name').drop
+   db.collection(coll_name).drop
+   db.collection_names.keep_if {|c| c.start_with? coll_name+'__'}.each {|related_collection| db.collection(related_collection).drop}
+
    db.collection('__METADATA__').remove('_id' => coll_name)
 end
 

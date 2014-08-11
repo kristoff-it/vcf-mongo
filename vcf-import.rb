@@ -109,6 +109,10 @@ if ARGV.length < 2
 end
 
 collection = ARGV[0]
+if collection.include? '__'
+   abort('Double underscores are used internally and cannot be part of a collection name.')
+end
+
 vcf_filenames = ARGV[1..-1]
 if vcf_filenames.length != vcf_filenames.to_set.length
    # This is to prevent possibly confusing 'sample names collision' errors.

@@ -3,9 +3,9 @@ vcf-mongo
 
 A small collection of scripts that uses MongoDB to store VCF files in collections.
 
-A single collection can contain multiple VCF file that get soft-merged, meaning that you can conceptually think a collection as a big VCF file, but no information is lost, as some fields are 'multiplexed' (the `ID` field becomes ad `IDs` array field, for example) leaving the choice of how to merge the data (if required) to the querying scripts (either provided or custom built by the user).
+A single collection can contain multiple VCF file that get soft-merged, meaning that you can conceptually think a collection as a big VCF file, but no information is lost, as some fields are 'multiplexed' (the `ID` field becomes an `IDs` array field, for example) leaving the choice of how to merge the data (if required) to the querying scripts (either provided or custom built by the user).
 
-The soft-merge approach should offer a somewhat natural way of querying the database while still offering good flexibility in terms of fruition of the data.
+The soft-merge approach should offer a somewhat natural way of querying the database while still offering good flexibility in terms of fruition.
 
 An example script that queries for private variants is also provided.
 
@@ -38,7 +38,7 @@ The switches are:
 * Drop bad records without causing the whole opration to fail (bad as in 'rejected by the HTSJDK parser'): `--drop-bad-records` (a warning is printed to STDERR for each dropped record)
 * Disable the showing of import speed and buffer saturation (which would take a lot of space when logging STDOUT): `--no-progress`
 
-Both in case of a new database or a new collection, the scripts does the initialization for you, you don't need to use MongoDB directly for any of these operations.
+Both in case of a new database or a new collection, the script does the initialization for you, you don't need to use MongoDB directly for any of these operations.
 
 The import operations are done via the following pipeline:
 
@@ -47,9 +47,9 @@ The import operations are done via the following pipeline:
 * Multiple merge-threads mix the corresponding records (same CHROM:POS) yielded from the Aligner thread.
 * Multiple mongo-threads perform the import of these multi-records via insert (or upsert, in case of an `--append` operation).
 
-The best combination of buffer size and thread number depends on your machine, wether the MongoDB instance is local or remote, and the number (and complexity) of your VCF files.
+The best combination of buffer size and thread number depends on your machine, wether the MongoDB instance is local or remote, how many VCF files you're importing and how complex each file is (multisample, lots of subfields).
 
-The script also provides a count of how many items are inside each work queue. You can use that information to get an insight of where the bottleneck is.
+The script also provides a count of how many items are inside each work queue. You can use that information to get an insight on where the bottleneck is.
 
 As of now there are two *big-ish* things that need to be fixed:
 * There is no completion percentage of the operation because the HTSJDK parser hides the InputStream instance (so we can't `tell()` the current position): [issue #63](https://github.com/samtools/htsjdk/issues/63).
@@ -68,23 +68,27 @@ The commands are:
 * `check`: collection that have an import operation that didn't end correctly are flagged as *inconsistent* this command lists them
 * `fix`: fix an inconsistent collection
 
-Un-revertable operations require confirmation unless the `--force` option is specified.
+Destructive operations (`delete`, `fix`) require confirmation unless the `--force` option is specified.
 
 
 ##### Checking and fixing collections ####
 If an import operation fails the target collection is marked as *inconsistent*.
+
 If the operation was an import into a new collection, fixing it means deleting it.
-Instead, if the operation was an `--append` import, using the `fix` command will only delete the data relative to the new VCFs, leaving all the previously imported VCFs intact.
+
+Instead, if the operation was an `--append` import, using the `fix` command will only delete the data relative to the new VCFs, leaving all the previously imported data intact.
 
 
 ### Querying your collections ###
 
+TODO
 
 
 
 CONTRIBUTING
 ------------
 
+TODO
 
 
 
