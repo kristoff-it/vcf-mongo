@@ -1,4 +1,5 @@
 #!/usr/bin/env jruby
+
 require 'set'
 require 'optparse'
 
@@ -8,7 +9,8 @@ require 'mongo'
 include Mongo
 
 # Utils:
-require 'vcfdb-core.rb'
+require 'lib/vcf-mongo'
+include VCFMongo::Import
 
 
 options = {
@@ -286,7 +288,7 @@ end
 start_timer = Time.now
 previous_line_length = 0
 
-while mongo_threads.any? {|t| t.alive?} # TODO: check if condition is correct
+while mongo_threads.any? {|t| t.alive?} 
    if options[:drop_bad_records]
       while not merger_threads_errors.empty?
          item, ex = merger_threads_errors.pop

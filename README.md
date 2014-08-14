@@ -3,9 +3,9 @@ vcf-mongo
 
 A small collection of scripts that uses MongoDB to store VCF files in collections.
 
-A single collection can contain multiple VCF file that get soft-merged, meaning that you can conceptually think a collection as a big VCF file, but no information is lost, as some fields are 'multiplexed' (the `ID` field becomes an `IDs` array field, for example) leaving the choice of how to merge the data (if required) to the querying scripts (either provided or custom built by the user).
+A single collection can contain multiple VCF file that get soft-merged, meaning that you can conceptually think a collection as a big VCF file, but no information is lost, as some fields are 'multiplexed' (the `ID` field becomes an `IDs` array field, for example) leaving the choice of how to merge the data (when necessary) to the querying scripts (either provided or custom built by the user).
 
-The soft-merge approach should offer a somewhat natural way of querying the database while still offering good flexibility in terms of fruition.
+A soft-merge approach should offer a somewhat natural way of querying the database while still offering good flexibility in terms of fruition.
 
 An example script that queries for private variants is also provided.
 
@@ -75,11 +75,7 @@ Destructive operations (`delete`, `fix`) require confirmation unless the `--forc
 
 ##### Checking and fixing collections ####
 If an import operation fails the target collection is marked as *inconsistent*.
-
-If the operation was an import into a new collection, fixing it means deleting it.
-
-Instead, if the operation was an `--append` import, using the `fix` command will only delete the data relative to the new VCFs, leaving all the previously imported data intact.
-
+If the import operation was into an already existing collection (`--append`), the operation can be reverted, otherwise fixing the collection means deleting it (as the possibility of resuming an import is not yet available).
 
 ### Querying your collections ###
 

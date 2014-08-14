@@ -1,4 +1,5 @@
 #!/usr/bin/env jruby
+
 require 'optparse'
 
 # MongoDB:
@@ -22,7 +23,7 @@ options = {
 
 
 OptionParser.new do |opts|
-  opts.banner = "Manage VCF collectons.\n Usage: vcf-admin.rb [options] {list | rename | copy | delete | check | fix}  [collection]"
+  opts.banner = "Get private variants belonging to GROUP_A from a collection. \nUsage: vcf-private.rb get COLLECTION GROUP_A [options]. \nGroups are comma-separted lists of sample names."
   
   # MongoDB connection options
   opts.on("--address HOSTNAME",  
@@ -166,7 +167,7 @@ when "get"
 
    # Headers
    puts '##fileformat=VCFv4.1'
-   puts '##FORMAT=<ID="RR", Count=1, Type=String, Description="Relative REF: when merging multiple VCF files the REF field might not coincide (a variant might be a SNP in a VCF and a Complex in another, for example).">'
+   puts '##FORMAT=<ID="_RR_", Count=1, Type=String, Description="Relative REF: when merging multiple VCF files the REF field might not coincide (a variant might be a SNP in a VCF and a Complex in another, for example).">'
 
    # # INFOs
    # selected_infos = {}
@@ -206,6 +207,24 @@ when "createindex"
 when "deleteindex"
 when "serve"
    require 'sinatra'
+
+   host = 'localhost'
+   port = 8080
+   begin 
+      if ARGV.length == 2
+         host, port = ARGV[1].split(':')
+      elsif ARGV.length != 1
+         raise ''
+      else
+         puts ""
+      end
+   rescue
+      abort "The `serve` command has an optional potisional parameter. \nUsage: serve [host:port] \nDefaults to localhost:8080."
+   end
+   set :bind, host
+   set :port, port
+
+
    get '/:collection/:samplelist' do
       "test"
    end

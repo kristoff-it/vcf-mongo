@@ -163,7 +163,7 @@ def merge_records(tuples, samples)
       merged_record['INFOs']   << record.INFO
       merged_record['samples'].concat(record.samples)
       if record.REF != merged_record['REF']
-         record.samples.each {|s| s['#RR'] = record.REF}
+         record.samples.each {|s| s['_RR_'] = record.REF}
       end
    end
    return merged_record
@@ -669,13 +669,11 @@ def build_private_filters(params)
 
    }
    """
-   #TODO: add indexes to speedup the case where all VCFs are taken into consideration?
    filters = {}
    if only_snps
       filters['$and'] =  relevant_vcfs.map{|id| {"REF" => /[ACGT]/}}
       filters['$and'] += good_samples.map {|id| {"samples.#{id}.GT" => /[ACGT]/}}
-      filters['$and'] += good_samples.map {|id| {"samples.#{id}.RR" => {'$in' => [nil, 'A', 'C', 'G', 'T']}}}
-   #TODO: test condition^^
+      filters['$and'] += good_samples.map {|id| {"samples.#{id}._RR_" => {'$in' => [nil, 'A', 'C', 'G', 'T']}}}
    end
    if apply_filters
       if filters['$and']
