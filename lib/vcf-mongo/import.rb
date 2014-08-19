@@ -1,4 +1,6 @@
 module VCFMongo
+
+   # Contains all the operations done by vcf-import.
    module Import
       require 'set'
       require 'java'
@@ -6,11 +8,8 @@ module VCFMongo
       require 'htsjdk/tribble-1.113.jar'
       require 'htsjdk/variant-1.113.jar'
 
-      include Admin
-
       java_import "org.broadinstitute.variant.vcf.VCFFileReader"
 
-      DATAMODEL_VERSION = 0.1
 
       # Uniform way of accessing error messages between Java exceptions and the Ruby ones.
       class StandardError
@@ -19,6 +18,8 @@ module VCFMongo
          end
       end
 
+      # Takes a Mongo::DB instance and initializes it for usage as a VCF store 
+      # by adding a '__METADATA__' collection with a '__METADATA__' document in it.
       def init_db(db)
          meta = {
             "_id" => '__METADATA__',
@@ -29,7 +30,7 @@ module VCFMongo
          db.collection('__METADATA__').insert(meta)
       end
 
-
+      # Creates the metadata document for a new collection.
       def init_metadata(db, coll_name, files, headers, samples)
          samples_field = []
          samples.each_with_index {|sublist, i| sublist.each {|s| samples_field << {'name' => s, 'vcfid' => i}}}
@@ -48,6 +49,7 @@ module VCFMongo
          return {:old_vcfs => 0, :old_samples => 0}
       end
 
+      # Updates the metadata pertaining a collection that is getting updated.
       def update_metadata(db, coll_name, files, headers, samples)
          #TODO: add race conditions checks
          dbmeta = db.collection('__METADATA__').find_one('_id' => coll_name)
@@ -70,6 +72,7 @@ module VCFMongo
       end
 
 
+      # VCF record class (used to safely manipulate concurrently multiple VCF records)
       class Record
          attr_reader :CHROM, :POS, :ID, :REF, :QUAL, :FILTER, :INFO, :meta, :samples
          def initialize (parser_record)
@@ -184,7 +187,7 @@ module VCFMongo
 
 
 
-
+      # Given an alignment of records, performs the merge operations.
       def merge_records(tuples, samples)
          merged_record = {
             '_id'     => tuples[0][1].CHROM + ':' + tuples[0][1].POS.to_s,
@@ -219,6 +222,7 @@ module VCFMongo
          return merged_record
       end
 
+      # When appending to a collection, untouched records need to be 'aligned' by adding some nil values.
       def update_untouched_records(dbconn, coll_name, oldcounts, samples)
          # Get all records that are missing the new samples by checking the sample list length:
          filtering_condition = {'IDs' => {'$size' => oldcounts[:old_vcfs]}}
@@ -235,6 +239,7 @@ module VCFMongo
          dbconn.collection(coll_name).update(filtering_condition, update_operation, {:multi => true})
       end
 
+      # Initializates a HTSJDK parser for each VCF.
       def load_parsers(vcf_filenames)
          files = vcf_filenames.map {|f| java.io.File.new(f)}
          parsers = files.map {|f| VCFFileReader.new(f, false)}
@@ -285,7 +290,7 @@ module VCFMongo
          return files, parsers, headers, samples
       end
 
-
+      # Import into a new collection.
       def mongo_direct_import(collection, queue, options, total_counter)
          bulk = collection.initialize_ordered_bulk_op
          done_symbols_found = 0
@@ -307,9 +312,11 @@ module VCFMongo
          end
          if count != 0
             bulk.execute
+            total_counter.add(count)
          end
       end
 
+      # Append import into an existing collection.
       def mongo_append_import(collection, queue, options, total_counter)
          bulk = collection.initialize_ordered_bulk_op
          done_symbols_found = 0
@@ -355,7 +362,7 @@ module VCFMongo
       end
 
 
-
+      # Threadsafe counter.
       class Counter
          attr_reader :total
 

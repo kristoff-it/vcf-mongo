@@ -9,7 +9,8 @@ require 'mongo'
 include Mongo
 
 # Utils:
-require 'lib/vcf-mongo'
+require 'vcf-mongo'
+include VCFMongo::Admin
 include VCFMongo::Import
 
 

@@ -7,7 +7,8 @@ require 'mongo'
 include Mongo
 
 # Utils:
-require 'vcfdb-core.rb'
+require 'vcf-mongo'
+include VCFMongo::Admin
 
 
 options = {

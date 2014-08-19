@@ -79,15 +79,71 @@ If the import operation was into an already existing collection (`--append`), th
 
 ### Querying your collections ###
 
-TODO
+You can query your collections by directly loading a mongo client into your script/REPL.
+Collections are stored as MongoDB collections and each record is stored very similarly to a VCF record:
 
+```
+require 'mongo'
+include Mongo
 
+db = MongoClient.new.db('VCF')
 
-CONTRIBUTING
-------------
+myRecord = db.collection('humans').find_one('CHROM' => "1", 'POS' => 20)
+pp myrecord
 
-TODO
-
+{
+  "CHROM"=>"1",
+  "POS"=>20,
+  "IDs"=>["."],
+  "REF"=>"T",
+  "QUALs"=>[14032.85],
+  "FILTERs"=>[[]],
+  "INFOs"=>[{
+       "BaseQRankSum"=>"-11.292",
+       "HaplotypeScore"=>"11.0809",
+       "QD"=>"14.15",
+       "MLEAC"=>"7",
+       "MQ"=>"27.20",
+       "MLEAF"=>"0.500",
+       "AC"=>"7",
+       "FS"=>"0.281",
+       "MQRankSum"=>"3.859",
+       "ReadPosRankSum"=>"-1.972",
+       "Dels"=>"0.00","DP"=>"992",
+       "AF"=>"0.500","MQ0"=>"159",
+       "AN"=>"14"
+        }],
+    "samples"=>[
+       {
+	       "GT"=>["T","G"],
+	       "AD"=>[19,35],
+	       "DP"=>54,
+	       "GQ"=>99,
+	       "PL"=>[858,0,183]
+	   },
+       {
+	       "GT"=>["T","G"],
+	       "AD"=>[63,120],
+	       "DP"=>183,
+	       "GQ"=>99,
+	       "PL"=>[2771,0,960]
+       },
+       {
+	       "GT"=>["T","G"],
+	       "AD"=>[50,111],
+	       "DP"=>161,
+	       "GQ"=>99,
+	       "PL"=>[2213,0,740]
+       },
+       {
+	       "GT"=>["T","G"],
+	       "AD"=>[58,113],
+	       "DP"=>171,
+	       "GQ"=>99,
+	       "PL"=>[2326,0,685]
+       }]
+}
+```
 
 
 

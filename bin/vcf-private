@@ -1,0 +1,552 @@
+#!/usr/bin/env jruby
+
+require 'optparse'
+
+# MongoDB:
+require 'mongo'
+include Mongo
+
+# Utils:
+require 'vcf-mongo'
+include VCFMongo::Admin
+
+
+options = {
+   :address => 'localhost',
+   :port    => 27017,
+   :db      => 'VCF',
+   :only_snps => false,
+   :apply_filters => false,
+   :min_qual => 0,
+   :bad_group => nil,
+
+}
+
+
+OptionParser.new do |opts|
+  opts.banner = "Get private variants belonging to GROUP_A from a collection. \nUsage: vcf-private.rb get COLLECTION GROUP_A [options]. \nGroups are comma-separted lists of sample names (no spaces inbetween)."
+  
+  # MongoDB connection options
+  opts.on("--address HOSTNAME",  
+   "Host address where the MongoDB instance is running. Defaults to `localhost`") do |host|
+    options[:address] = host
+  end
+  opts.on("--port PORT", Integer,  
+   "Port number where the MongoDB instance is listening. Defaults to `?????`.") do |port|
+    options[:port] = port
+  end
+  opts.on("--db DATABASE",  
+   "Database name where the VCF data is stored. Defaults to `VCF`.") do |db|
+    options[:db] = db
+  end
+
+  # Filtering options:
+  opts.on("--against CONTROLGROUP", Array,  
+   "Test for privates against a specific subset of the samples in this collection.") do |badgroup|
+    options[:bad_group] = badgroup
+  end  
+  opts.on("--only-SNPs",  
+   "Consider only private SNPs.") do |snps|
+    options[:only_snps] = snps
+  end
+  opts.on("--apply-FILTERs",  
+   "Exclude records that didn't pass all filters.") do |filters|
+    options[:apply_filters] = filters
+  end
+  opts.on("--gt2ref-GQ MINGQ",  
+   "Calls with a GQ value lower than MINGQ are considered to have the reference genotype.") do |mingq|
+    options[:mingq] = mingq
+  end  
+  opts.on("--gt2ref-DP MINDP",  
+   "Calls with a DP value lower than MINDP are considered to have the reference genotype.") do |mindp|
+    options[:mindp] = mindp
+  end  
+  opts.on("--max-gt2ref-priv MAXPRIV",  
+   "Records with a number higher than MAXPRIV of low quality calls in the private group are not considered.") do |maxpriv|
+    options[:max_lowq_priv] = maxpriv
+  end  
+  opts.on("--max-gt2ref-contr MAXCONTR",  
+   "Records with a number higher than MAXCONTR of low quality calls in the contol group are not considered.") do |maxcontr|
+    options[:max_lowq_contr] = maxcontr
+  end  
+  opts.on("--max-gt2ref-total MAXLOWQ",  
+   "Records with a number higher than MAXLOWQ of low quality calls (indipendently of what group they belong to) are not considered. ") do |minqual|
+    options[:max_lowq_total] = minqual
+  end  
+
+end.parse!
+
+# Check database status:
+dbconn = MongoClient.new(options[:address], options[:port]).db(options[:db])
+dbstatus = check_db(dbconn)
+case dbstatus
+when :bad
+  abort("Database `#{options[:db]}` doesn't seem to belong to this application.")
+when :empty
+  abort("This is an empty database, nothing to do.")
+end
+
+
+# Execute the command:
+if ARGV.length < 1
+   abort("Must be called with a command. \nValid commands are: get, createindex, deleteindex, serve")
+end
+
+case ARGV[0]
+when "get"
+   arguments = ARGV[1..-1]
+   if arguments.length != 2
+      abort("The `get` command requires 2 positional arguments. \nUsage: get COLLECTION PRIVATEGROUP [--against CONTROLGROUP] \n(eg: get myHumans NA01,NA02,NA03) \nWhen no control group is pecified, privates are tested against all other samples in the collection.")
+   end
+   
+   # Check collection status:
+   collection = arguments[0]
+   collectionstatus = check_collection(dbconn, arguments[0])
+   if collectionstatus == :new
+       abort("Collection does not exist.")
+   elsif collectionstatus != :consistent
+      abort('The collection is in an inconsistent state. Use vcf-admin to check (and fix) it.')
+   end
+
+   # Parse the group argument:
+   good_names = arguments[1].split(',')
+
+   # Get the collection metadata:
+   metadata = collection_details(dbconn, collection)
+
+   # Get IDs for all samples:
+   # (if a control group wasn't specified, we assume it's comprised of all the remaining samples)
+
+   begin
+      good_samples, bad_samples = name2id(metadata, good_names, options[:bad_group])
+   rescue => ex
+      abort("Unable to get samples: #{ex.message}.")
+   end
+
+   relevant_vcf_ids = Set.new
+   good_samples.each{|s| relevant_vcf_ids.add(metadata['samples'][s]['vcfid'])}
+   bad_samples.each{|s| relevant_vcf_ids.add(metadata['samples'][s]['vcfid'])}
+
+   # Build filters based on user preferences:
+   filters = build_private_filters( :good_samples   => good_samples, 
+                                    :bad_samples    => bad_samples, 
+                                    :relevant_vcfs  => relevant_vcf_ids,
+                                    :only_snps      => options[:only_snps],
+                                    :apply_filters  => options[:apply_filters],
+                                    :mingq          => options[:mingq],
+                                    :mindp          => options[:mindp],
+                                    :max_lowq_priv  => options[:max_lowq_priv],
+                                    :max_lowq_contr => options[:max_lowq_contr],
+                                    :max_lowq_total => options[:max_lowq_total])
+                           
+
+   # Perform the query:
+   res = dbconn.collection(arguments[0]).find(filters, {:fields => {'_id' => 0}})
+
+
+   # Headers
+   puts '##fileformat=VCFv4.1'
+   puts '##FORMAT=<ID="_RR_", Count=1, Type=String, Description="Relative REF: when merging multiple VCF files the REF field might not coincide (a variant might be a SNP in a VCF and a Complex in another, for example).">'
+
+   # Table header:
+   puts "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + good_samples.map{|id| metadata['samples'][id]['name']}.join("\t")
+   
+   # Lines:
+   res.each do |r|
+      alt, format, samples = normalize(r['samples'])
+      puts "#{r['CHROM']}\t#{r['POS']}\t.\t#{r['REF']}\t#{alt.join(',')}\t.\t.\t.\t#{format.join(':')}\t#{samples.join("\t")}"
+   end
+
+when "createindex"
+when "deleteindex"
+when "serve"
+   require 'sinatra'
+   require 'json'
+   include JSON
+
+   host = 'localhost'
+   port = 8080
+   begin 
+      if ARGV.length == 2
+         host, port = ARGV[1].split(':')
+      elsif ARGV.length != 1
+         raise ''
+      else
+         puts ""
+      end
+   rescue
+      abort "The `serve` command has an optional potisional parameter. \nUsage: serve [host:port] \nDefaults to localhost:8080."
+   end
+   set :bind, host
+   set :port, port
+
+   puts "Go to http://#{host}:#{port} to see the expected request structure."
+
+
+   get '/' do
+      content_type 'text/plain'
+      [ "Hello!",
+        "This is the http interface for vcf-private.",
+        "",
+        "Usage:",
+        "Send a GET request with",
+        " - Path: /:collection/:samplelist",
+        " - Query options: against, apply-FILTERs, only-SNPs, gt2ref-DP, gt2ref-GQ, max-gt2ref-priv, max-gt2ref-contr, max-gt2ref-total",
+        " - Accept: if contains `application/json` returns the complete multiplexed VCF + metadata (headers, VCF filenames, ...), otherwise returns a merged VCF file (ID and INFO fields are dropped)",
+        "",
+        "When an error occurs, returns an error status code with a plaintext explanation.",
+        "Checkout the help (-h flag) fore more info about the query options.",
+        "",
+        "",
+        "Check the console output from the running server to get some info about how filters are applied for each request,",
+        "Lastly, keep in mind that the diamond bracket characters (< >) are not escaped so dont expect web browsers to display the header fields correctly inside the JSON data, if you happen to do the request using one."
+      ].join("\n")
+   end
+
+   get '/:collection/:samplelist' do
+      # Check collection status:
+      collectionstatus = check_collection(dbconn, params[:collection])
+      if collectionstatus == :new
+         return [404, "Collection does not exist."]
+      elsif collectionstatus != :consistent
+         return [403, 'The collection is in an inconsistent state. Use vcf-admin to check (and fix) it.']
+      end
+
+      # Parse the group arguments:
+      good_names = params[:samplelist].split(',')
+      if params[:against]
+         bad_names = params[:against].split(',')
+      else
+         bad_names = nil
+      end
+
+      # Get the collection metadata:
+      metadata = collection_details(dbconn, params[:collection])
+
+
+      # Get IDs for all samples:
+      # (if a control group wasn't specified, we assume it's comprised of all the remaining samples)
+      begin
+         good_samples, bad_samples = name2id(metadata, good_names, bad_names)
+      rescue => ex
+         return [400, "Unable to get samples: #{ex.message}."]
+      end
+
+      relevant_vcf_ids = Set.new
+      good_samples.each{|s| relevant_vcf_ids.add(metadata['samples'][s]['vcfid'])}
+      bad_samples.each{|s| relevant_vcf_ids.add(metadata['samples'][s]['vcfid'])}
+
+      # Build filters based on user preferences:
+      filters = build_private_filters( :good_samples   => good_samples, 
+                                       :bad_samples    => bad_samples, 
+                                       :relevant_vcfs  => relevant_vcf_ids,
+                                       :only_snps      => params['only-SNPs'],
+                                       :apply_filters  => params['apply-FILTERs'],
+                                       :mingq          => params['gt2ref-GQ'],
+                                       :mindp          => params['gt2ref-DP'],
+                                       :max_lowq_priv  => params['max-gt2ref-priv'],
+                                       :max_lowq_contr => params['max-gt2ref-contr'],
+                                       :max_lowq_total => params['max-gt2ref-total'])
+                              
+
+      # Perform the query:
+      res = dbconn.collection(params[:collection]).find(filters, {:fields => {'_id' => 0}})
+      # Debug the filtering function:
+      puts '#########################'
+      puts '### GENERATED JS CODE ###'
+      puts filters['$where']
+      puts '#########################'
+      puts '###   OTHER FILTERS   ###'
+      puts filters.keep_if {|k, v| k != '$where'}
+      puts '#########################'
+
+
+      _RR_headerline = "##FORMAT=<ID=\"_RR_\", Count=1, Type=String, Description=\"Relative REF: when merging multiple VCF files the REF field might not coincide (a variant might be a SNP in a VCF and a Complex in another, for example).\">"
+      stream do |out|
+         if request.accept? 'application/json'
+            content_type 'application/json'
+            metadata['custom_db_header'] = {'ID' => '_RR_', 'line' => _RR_headerline}
+
+            # Ugly but allows for a minimal level of streaming:
+            out << '{"metadata":'
+            out << metadata.to_json << ','
+            out << '"records": ['
+            first_record = res.next
+
+            # Necessary to avoid spurious commas (without adding dumb checks for each loop):
+            if first_record
+               out << first_record.to_json 
+            end
+            res.each do |r| 
+               out << ',' << r.to_json 
+            end
+            out << "]}"
+         else
+            content_type 'text/plain'
+
+            # Headers
+            out << '##fileformat=VCFv4.1' << "\n"
+            out << _RR_headerline << "\n"
+
+            # Table header:
+            out << "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + good_samples.map{|id| metadata['samples'][id]['name']}.join("\t") << "\n"
+            
+            # Lines:
+            res.each do |r|
+               alt, format, samples = normalize(r['samples'])
+               puts alt, format, samples
+               out << "#{r['CHROM']}\t#{r['POS']}\t.\t#{r['REF']}\t#{alt.join(',')}\t.\t.\t.\t#{format.join(':')}\t#{samples.join("\t")}" << "\n"
+            end
+            out << "\n"
+         end
+      end
+   end
+else
+   abort("Valid commands are: get, createindex, deleteindex, serve.")
+end
+
+
+# This (very ugly) function composes the MongoDB query.
+# It is composed of 2 parts basically:
+# - composition of the first filtering conditions that get executed before entering the JS env
+# - construction of the JavaScript function that does the more complex filtering
+# This second part is done by stitching strings together: ugly but necessary to avoid useless
+# operations when a filter is not specified.
+def build_private_filters(params)
+   good_samples   = params[:good_samples] 
+   bad_samples    = params[:bad_samples] 
+   relevant_vcfs  = params[:relevant_vcfs] 
+
+   apply_filters  = params[:apply_filters] 
+   only_snps      = params[:only_snps] 
+
+   max_lowq_priv  = params[:max_lowq_priv] 
+   max_lowq_contr = params[:max_lowq_contr] 
+   max_lowq_total = params[:max_lowq_total] 
+
+   mingq          = params[:mingq] 
+   mindp          = params[:mindp] 
+
+
+   min_js = ""
+   min_priv_js = ""
+   min_priv_js2 = ""
+   min_contr_js = ""
+   conditions = []
+
+
+   if mingq or mindp
+   # Build the initial part of the script
+      if mindp 
+         conditions << "!(this.samples[samples[0]].DP && this.samples[samples[0]].DP > #{mindp})"
+      end
+      if mingq
+         conditions << "!(this.samples[samples[0]].GQ && this.samples[samples[0]].GQ > #{mingq})"
+      end
+      min_js += "if ( #{conditions.join(' || ')} )\n"
+
+      if max_lowq_total or max_lowq_contr
+         min_js = "lowq_contr = 0;\n" + min_js
+      end
+
+      if max_lowq_priv or max_lowq_total
+         min_js = "lowq_priv = 0;\n" + min_js + "  lowq_priv += 1;\n"
+      else
+         min_js += ";\n"
+      end
+      min_js += "else\n"
+
+   # Build other checks
+      min_priv_js = "if ( #{conditions.join(' || ').gsub('[0]', '[i]')} )\n"
+      if max_lowq_priv or max_lowq_total
+         min_priv_js += "  lowq_priv += 1;\n"
+         if max_lowq_priv
+            min_priv_js += "else if (lowq_priv > #{max_lowq_priv})\n  return false;\n"
+         end
+      else
+         min_priv_js += ";\n"
+      end
+      min_priv_js += "else\n"
+
+      min_priv_js2 = " || #{conditions.join(' || ').gsub('[0]', '[i]')}"
+
+      min_contr_js = "if ( #{conditions.join(' || ').gsub('[0]', '[i]')} )\n"
+      if max_lowq_total or max_lowq_contr
+         min_contr_js += "  lowq_contr += 1;\n"
+         miniconditions = []
+         if max_lowq_contr
+            miniconditions << "(lowq_contr > #{max_lowq_contr})"
+         end
+         if max_lowq_total
+            miniconditions << "(lowq_contr + lowq_priv > #{max_lowq_total})"
+         end
+         min_contr_js += "else if ( #{miniconditions.join(' || ')} )\n  return false;\n"
+      else
+         min_contr_js += ";\n"
+      end
+
+      min_contr_js += "else\n"
+   end
+
+   filtering_js = 
+   """
+   function () {
+
+      samples = #{good_samples.to_s};
+
+      good_genotype = null;
+      good_genotype_is_ref = true;
+
+      #{min_js}
+
+      if (this.samples[samples[0]]){
+         good_genotype = this.samples[samples[0]].GT.sort();
+         for (i = 0; i < good_genotype.length; i++)
+            if (good_genotype[i] != this.REF){
+               good_genotype_is_ref = false;
+               break;
+            }
+      }
+
+
+      for(i = 1; i < samples.length; i++){
+         if (good_genotype_is_ref){
+            if (this.samples[samples[i]]){
+               this.samples[samples[i]].GT.sort();
+               
+               #{min_priv_js}
+
+               for (j = 0; j < this.samples[samples[i]].GT.length; j++)
+                  if (this.samples[samples[i]].GT[j] != this.REF)
+                     return false;         
+            }
+         }else{
+            if (!this.samples[samples[i]] #{min_priv_js2})
+               return false;
+            else{
+              this.samples[samples[i]].GT.sort();
+              for (j = 0; j < this.samples[samples[i]].GT.length; j++)
+                if (this.samples[samples[i]].GT[j] != good_genotype[j])
+                  return false;
+            }
+         }
+      }
+
+      samples = #{bad_samples.to_s};
+      for(i = 0; i < samples.length; i++){
+         if (good_genotype_is_ref){
+            if(!this.samples[samples[i]] #{min_priv_js2})
+               return false;
+            else{
+               this.samples[samples[i]].GT.sort();
+               for (j = 0; j < this.samples[samples[i]].GT.length; j++){
+                  if (this.samples[samples[i]].GT[j] != this.REF)
+                     break;
+                  if (j == this.samples[samples[i]].GT.length - 1)
+                     return false;
+                }
+            }
+         }else{
+            if (this.samples[samples[i]])
+               this.samples[samples[i]].GT.sort();
+
+               #{min_contr_js}
+
+               for (j = 0; j < this.samples[samples[i]].GT.length; j++){
+                  if (this.samples[samples[i]].GT[j] != good_genotype[j])
+                     break;
+                  if (j == this.samples[samples[i]].GT.length - 1)
+                     return false;
+               }
+         }
+      }
+
+      return true;
+
+   }
+   """
+   filters = {}
+   if only_snps
+      filters['$and'] =  relevant_vcfs.map{|id| {"REF" => /[ACGT]/}}
+      filters['$and'] += good_samples.map {|id| {"samples.#{id}.GT" => /[ACGT]/}}
+      filters['$and'] += good_samples.map {|id| {"samples.#{id}._RR_" => {'$in' => [nil, 'A', 'C', 'G', 'T']}}}
+   end
+   if apply_filters
+      if filters['$and']
+         filters['$and'] +=  relevant_vcfs.map{|id| {"FILTERs.#{id}" => {'$in' => ['PASS', '.', nil]}} }
+      else
+         filters['$and'] =   relevant_vcfs.map{|id| {"FILTERs.#{id}" => {'$in' => ['PASS', '.', nil]}} }
+      end
+   end
+
+   filters['$where'] = filtering_js;
+   return filters
+
+end
+
+# From sample hashes to ALT, FORMAT and SAMPLE lists (either comma- or colon- separated).
+def normalize (samples)
+   alts = []
+   samples.each do |s|
+      if s['GT']
+         s['GT'] = s['GT'].map do |allele|
+            id = alts.index(allele)
+            if not id
+               alts << allele
+               alts.length - 1
+            else
+               id
+            end
+         end
+      end
+   end
+
+   format = Set.new 
+   samples.each {|s| s.keys.each {|k| format.add(k)}}
+   format.delete('GT')
+   format = ['GT'] + format.to_a
+   
+   samples = samples.map do |s|
+      format.map do |f|
+         if s[f]
+            if f == 'GT'
+               s[f].join('/')
+            elsif s[f].respond_to? :each
+               s[f].join(',')
+            else
+               s[f]
+            end
+         else
+            '.'
+         end
+      end.join(':')
+   end
+
+   [alts, format, samples]
+end
+
+# Gets the position index for each sample name given.
+def name2id (metadata, good_names, bad_names=nil)
+   name2id = Hash[metadata['samples'].each_with_index.map {|sample, id| [sample['name'], id]}]
+   good_samples = good_names.map do |name| 
+      if name2id[name] != nil
+         name2id[name]
+      else
+         raise "sample `#{name}` is not present in this collection"
+      end
+   end
+
+   if bad_names
+      bad_samples = bad_names.map do |name|
+         if name2id[name] != nil
+            name2id[name]
+         else
+            raise "sample `#{name}` is not present in this collection"
+         end
+      end
+   else
+      bad_samples = name2id.keep_if{|k, v| not good_names.include? k}.map{|k, v| v}
+   end
+
+   return good_samples, bad_samples
+end

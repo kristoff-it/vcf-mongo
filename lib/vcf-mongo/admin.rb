@@ -1,6 +1,14 @@
 module VCFMongo
+
+   # The Admin module contains all administrative operations, 
+   # such as listing all present collections and checking for various statuses.
    module Admin
       
+      # Takes in input a Mongo::DB instance and checks if the database it references
+      # belongs to this application or not. 
+      # Return values are either the symbols :empty, :ok, :bad or a string that says
+      # that there is a version mismatch between the script and the datamodel version
+      # upon which the database was created.
       def check_db(db)
          collections = db.collection_names.reject{|c| c.start_with?("system.")} 
          if collections.length == 0
@@ -19,7 +27,13 @@ module VCFMongo
          return :bad
       end
 
-
+      # Takes in imput a Mongo::DB instance and a String representing a collection name.
+      # Checks the consistency status of the collection. Return values are the symbols
+      # :new         (collection does not exist),
+      # :consistent  (ok)
+      # :spuriousM   (there is a metadata document but the collection does not exist),
+      # :INIT        (there is an initial import operation pending)
+      # :APPEND      (there is an append import operation pending)
       def check_collection(db, coll_name)
          table_exists = db.collection_names.include? coll_name
          meta = db.collection('__METADATA__').find_one('_id' => coll_name)
@@ -41,10 +55,16 @@ module VCFMongo
 
          return :APPEND
       end
+
+      # Takes a Mongo::DB instance in input and returns a list of all present 
+      # collections (as present in the '__METADATA__' meta-collection)
       def list_collections(db)
          return db.collection('__METADATA__').find({'_id' => {'$ne'=> '__METADATA__'}}, {:fields => '_id'}).map {|c| c['_id']}
       end
 
+      # Takes a Mongo::DB instance and a String representing a collection name in input.
+      # Returns the related metadata document containing informations about creation date,
+      # imported VCF files, samples, and cosistency status.
       def collection_details(db, coll_name)
          if (result = db.collection('__METADATA__').find_one('_id' => coll_name)) == nil
             raise "collection does not exist"
@@ -52,8 +72,14 @@ module VCFMongo
          return result
       end
 
+      # Takes a Mongo::DB instance and two Strings repesenting collection names.
+      # Renames an existing collection.
       def rename_collection(db, coll_name, new_name)
          collections = db.collection_names
+
+         if new_name.include?('__')
+            raise 'double underscores are resereved for internal usage'
+         end
 
          if not collections.include? coll_name
             raise "collection does not exist"
@@ -72,6 +98,9 @@ module VCFMongo
          db.collection('__METADATA__').remove('_id' => coll_name)
       end
 
+
+      # Takes a Mong::DB instance and a String representing a collection name.
+      # Deletes an existing collection.
       def delete_collection(db, coll_name)
          if db.collection('__METADATA__').find_one('_id' => coll_name) == nil
             raise "collection does not exist"
@@ -85,7 +114,8 @@ module VCFMongo
 
 
 
-
+      # Takes a Mongo::DB instance and returns a {:name, :reson} object representing
+      # the inconsitency reason of every inconsistent collection.
       def bad_collections(db)
          return db.collection('__METADATA__').find('_id' => {'$ne' => '__METADATA__'}, 'consistent' => false).map do |c|
             if c['last_inconsistency_reason'][0] == 'INIT'
@@ -96,15 +126,18 @@ module VCFMongo
          end
       end
 
-      def fix_collection(db, collection, fixtype)
+      # Takes a Mongo::DB instance, a String representing a collection name 
+      # and a symbol between [:spuriousM, :INIT, :APPEND] in input.
+      # Performs the appropriate fixing operation.
+      def fix_collection(db, coll_name, fixtype)
          case fixtype
          when :spuriousM
-            db.collection('__METADATA__').remove('_id' => collection)
+            db.collection('__METADATA__').remove('_id' => coll_name)
          when :INIT
-            db.collection(collection).drop
-            db.collection('__METADATA__').remove('_id' => collection)
+            db.collection(coll_name).drop
+            db.collection('__METADATA__').remove('_id' => coll_name)
          when :APPEND
-            metadata = db.collection('__METADATA__').find_one('_id' => collection)
+            metadata = db.collection('__METADATA__').find_one('_id' => coll_name)
             bad_vcfs = metadata['last_inconsistency_reason'][1]
 
             first_bad_vcf = metadata['vcfs'].index(bad_vcfs[0])
@@ -131,7 +164,7 @@ module VCFMongo
                   }
                }
 
-            db.collection(collection).update({}, update_operation, {:multi => true})
+            db.collection(coll_name).update({}, update_operation, {:multi => true})
 
             metadata_update_operation = {
                '$set' => {'consistent' => true}, 
@@ -141,7 +174,7 @@ module VCFMongo
                   'samples' => {'$each' => [], '$slice'=> number_of_good_samples}
                   },
                }
-            db.collection('__METADATA__').update({'_id' => collection}, metadata_update_operation)
+            db.collection('__METADATA__').update({'_id' => coll_name}, metadata_update_operation)
          else
             raise "unknown error state, fix_collection() doesn't know what to do"
          end
